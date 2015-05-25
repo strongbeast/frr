@@ -39,6 +39,7 @@ check_PROGRAMS = \
 	lib/test_privs \
 	lib/test_srcdest_table \
 	lib/test_segv \
+	lib/test_seqlock \
 	lib/test_sig \
 	lib/test_stream \
 	lib/test_table \
@@ -77,6 +78,7 @@ lib_test_privs_SOURCES = lib/test_privs.c
 lib_test_srcdest_table_SOURCES = lib/test_srcdest_table.c \
                                  helpers/c/prng.c
 lib_test_segv_SOURCES = lib/test_segv.c
+lib_test_seqlock_SOURCES = lib/test_seqlock.c
 lib_test_sig_SOURCES = lib/test_sig.c
 lib_test_stream_SOURCES = lib/test_stream.c
 lib_test_table_SOURCES = lib/test_table.c
@@ -107,6 +109,7 @@ lib_test_nexthop_iter_LDADD = $(ALL_TESTS_LDADD)
 lib_test_privs_LDADD = $(ALL_TESTS_LDADD)
 lib_test_srcdest_table_LDADD = $(ALL_TESTS_LDADD)
 lib_test_segv_LDADD = $(ALL_TESTS_LDADD)
+lib_test_seqlock_LDADD = $(ALL_TESTS_LDADD)
 lib_test_sig_LDADD = $(ALL_TESTS_LDADD)
 lib_test_stream_LDADD = $(ALL_TESTS_LDADD)
 lib_test_table_LDADD = $(ALL_TESTS_LDADD) -lm

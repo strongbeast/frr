@@ -14,6 +14,7 @@ lib_LTLIBRARIES = libfrr.la
 libfrr_la_LDFLAGS = -version-info 0:0:0 
 
 libfrr_la_SOURCES = \
+	seqlock.c \
 	network.c pid_output.c getopt.c getopt1.c \
 	checksum.c vector.c linklist.c vty.c \
 	graph.c command_parse.y command_lex.l command_match.c \
@@ -58,6 +59,7 @@ libfrrsnmp_la_SOURCES = \
 
 pkginclude_HEADERS = \
 	frratomic.h \
+	seqlock.h \
 	buffer.h checksum.h filter.h getopt.h hash.h \
 	if.h linklist.h log.h \
 	graph.h command_match.h \
