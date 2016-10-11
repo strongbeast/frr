@@ -23,7 +23,7 @@ libzebra_la_SOURCES = \
 	zclient.c sockopt.c smux.c agentx.c snmp.c md5.c if_rmap.c keychain.c privs.c \
 	sigevent.c pqueue.c jhash.c workqueue.c nexthop.c json.c \
 	ptm_lib.c csv.c bfd.c vrf.c systemd.c ns.c memory.c memory_vty.c \
-	imsg-buffer.c imsg.c skiplist.c \
+	imsg-buffer.c imsg.c skiplist.c ipsec.c \
 	qobj.c \
 	event_counter.c \
 	strlcpy.c \
@@ -45,7 +45,7 @@ pkginclude_HEADERS = \
 	workqueue.h route_types.h libospf.h nexthop.h json.h \
 	ptm_lib.h csv.h bfd.h vrf.h ns.h systemd.h bitfield.h \
 	fifo.h memory_vty.h mpls.h imsg.h openbsd-queue.h openbsd-tree.h \
-	skiplist.h qobj.h \
+	skiplist.h qobj.h ipsec.h \
 	event_counter.h
 
 noinst_HEADERS = \

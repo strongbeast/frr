@@ -47,6 +47,8 @@ use XML::LibXML;
 		"asn"			=> "(1-4294967295)",
 		"community"		=> "AA:NN",
 		"clist"			=> "(1-500)",
+		# OSPFv3 specific
+		"ipsec_spi"		=> "(256-4294967295)",
 		# LDP specific
 		"disc_time"		=> "(1-65535)",
 		"session_time"		=> "(15-65535)",

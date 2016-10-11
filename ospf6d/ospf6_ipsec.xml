@@ -1,0 +1,99 @@
+<?xml version="1.0"?>
+<file init="ospf6_vty_ipsec_init" cmdprefix="ospf6" header="ospf6_ipsec.h">
+  <subtree name="auth">
+    <option name="md5" arg="auth_type" help="Use MD5 authentication">
+      <option arg="auth_key" input="word" help="MD5 key (32 chars)" function="vty_ospf6_ipsec"/>
+    </option>
+    <option name="sha1" arg="auth_type" help="Use SHA-1 authentication">
+      <option arg="auth_key" input="word" help="SHA-1 key (40 chars)" function="vty_ospf6_ipsec"/>
+    </option>
+  </subtree>
+
+  <!-- configure terminal -->
+  <subtree name="__interface">
+    <option name="ipv6" help="IPv6 Information">
+      <option name="ospf6" help="Open Shortest Path First (OSPF) for IPv6">
+        <option name="authentication" arg="ipsec" help="Enable authentication">
+          <option name="ipsec" help="Use IPsec authentication">
+            <option name="spi" help="Set the SPI (Security Parameters Index)">
+              <option arg="spi" input="ipsec_spi" help="SPI" no_function="vty_ospf6_ipsec">
+                <include subtree="auth"/>
+              </option>
+            </option>
+          </option>
+        </option>
+        <option name="encryption" arg="ipsec" help="Enable encryption">
+          <option name="ipsec" help="Use IPsec authentication">
+            <option name="spi" help="Set the SPI (Security Parameters Index)">
+              <option arg="spi" input="ipsec_spi" help="SPI" no_function="vty_ospf6_ipsec">
+                <option name="esp" help="Use ESP encapsulation">
+                  <option name="3des" arg="enc_type" help="Use 3DES encryption">
+                    <option arg="enc_key" input="word" help="192bit key (48 chars)">
+                      <include subtree="auth"/>
+                    </option>
+                  </option>
+                  <option name="aes-cbc" arg="enc_type" help="Use AES-CBC encryption">
+                    <option name="128" arg="aes_key_len" help="Use 128 bit key">
+                      <option arg="enc_key" input="word" help="128bit key (32 chars)">
+                        <include subtree="auth"/>
+                      </option>
+                    </option>
+                    <option name="192" arg="aes_key_len" help="Use 192 bit key">
+                      <option arg="enc_key" input="word" help="192bit key (48 chars)">
+                        <include subtree="auth"/>
+                      </option>
+                    </option>
+                    <option name="256" arg="aes_key_len" help="Use 256 bit key">
+                      <option arg="enc_key" input="word" help="256bit key (64 chars)">
+                        <include subtree="auth"/>
+                      </option>
+                    </option>
+                  </option>
+                  <option name="des" arg="enc_type" help="Use DES encryption">
+                    <option arg="enc_key" input="word" help="64bit key (16 chars)">
+                      <include subtree="auth"/>
+                    </option>
+                  </option>
+                  <option name="null" arg="enc_type" help="ESP with no encryption">
+                    <include subtree="auth"/>
+                  </option>
+                </option>
+              </option>
+            </option>
+          </option>
+        </option>
+      </option>
+    </option>
+  </subtree>
+  <tree name="interface">
+    <include subtree="__interface"/>
+    <option name="no" arg="no" help="Negate a command or set its defaults">
+      <include subtree="__interface"/>
+    </option>
+  </tree>
+
+  <subtree name="__debug">
+    <option name="debug" help="Debugging functions (see also 'undebug')">
+      <option name="ospf6" help="Open Shortest Path First (OSPF) for IPv6">
+        <option name="ipsec" help="Debug OSPFv3 Interface" function="vty_ospf6_ipsec_debug"/>
+      </option>
+    </option>
+  </subtree>
+  <tree name="debug">
+    <include subtree="__debug"/>
+    <option name="no" arg="no" help="Negate a command or set its defaults">
+      <include subtree="__debug"/>
+    </option>
+  </tree>
+
+  <!-- nodes -->
+  <node name="INTERFACE">
+    <include tree="interface"/>
+  </node>
+  <node name="ENABLE">
+    <include tree="debug"/>
+  </node>
+  <node name="CONFIG">
+    <include tree="debug"/>
+  </node>
+</file>

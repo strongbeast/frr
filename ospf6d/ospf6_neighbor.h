@@ -99,6 +99,9 @@ struct ospf6_neighbor
 
   /* BFD information */
   void *bfd_info;
+
+  /* RFC 4552 authentication */
+  struct ipsec_entry *ipsec_entry;
 };
 
 /* Neighbor state */

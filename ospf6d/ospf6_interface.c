@@ -225,6 +225,8 @@ ospf6_interface_create (struct interface *ifp)
   oi->route_connected = OSPF6_ROUTE_TABLE_CREATE (INTERFACE, CONNECTED_ROUTES);
   oi->route_connected->scope = oi;
 
+  oi->ipsec_entries = list_new ();
+
   /* link both */
   oi->interface = ifp;
   ifp->info = oi;
@@ -240,6 +242,10 @@ ospf6_interface_delete (struct ospf6_interface *oi)
 {
   struct listnode *node, *nnode;
   struct ospf6_neighbor *on;
+  struct ipsec_entry *ie;
+
+  for (ALL_LIST_ELEMENTS (oi->ipsec_entries, node, nnode, ie))
+    ospf6_ipsec_uninstall (oi, ie);
 
   QOBJ_UNREG (oi);
 
@@ -469,6 +475,8 @@ ospf6_interface_connected_route_update (struct interface *ifp)
   OSPF6_LINK_LSA_SCHEDULE (oi);
   OSPF6_INTRA_PREFIX_LSA_SCHEDULE_TRANSIT (oi);
   OSPF6_INTRA_PREFIX_LSA_SCHEDULE_STUB (oi->area);
+
+  ospf6_update_ipsec (oi);
 }
 
 static void
@@ -1801,6 +1809,32 @@ config_write_ospf6_interface (struct vty *vty)
         }
 
       ospf6_bfd_write_config(vty, oi);
+
+      switch (oi->ipsec.proto)
+	{
+	case IPSEC_AH:
+	  vty_out (vty, " ipv6 ospf6 authentication ipsec spi %u %s %s%s",
+		   oi->ipsec.spi,
+		   LOOKUP (hash_algo_cli_str, oi->ipsec.auth_type),
+		   oi->ipsec.auth_key, VNL);
+	  break;
+	case IPSEC_ESP:
+	  vty_out (vty, " ipv6 ospf6 encryption ipsec spi %u esp ",
+		   oi->ipsec.spi);
+	  if (oi->ipsec.enc_type != IPSEC_ENC_NULL)
+	    vty_out (vty, "%s %s %s %s%s",
+		     LOOKUP (ipsec_enc_cli_str, oi->ipsec.enc_type),
+		     oi->ipsec.enc_key,
+		     LOOKUP (hash_algo_cli_str, oi->ipsec.auth_type),
+		     oi->ipsec.auth_key, VNL);
+	  else
+	    vty_out (vty, "null %s %s%s",
+		     LOOKUP (hash_algo_cli_str, oi->ipsec.auth_type),
+		     oi->ipsec.auth_key, VNL);
+	  break;
+	default:
+	  break;
+	}
 
       vty_out (vty, "!%s", VNL);
     }

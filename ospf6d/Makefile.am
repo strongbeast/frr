@@ -9,13 +9,15 @@ AM_CFLAGS = $(WERROR)
 noinst_LIBRARIES = libospf6.a
 sbin_PROGRAMS = ospf6d
 
+BUILT_SOURCES = ospf6_ipsec_cmds.c
+
 libospf6_a_SOURCES = \
 	ospf6_memory.c \
 	ospf6_network.c ospf6_message.c ospf6_lsa.c ospf6_lsdb.c \
 	ospf6_top.c ospf6_area.c ospf6_interface.c ospf6_neighbor.c \
 	ospf6_flood.c ospf6_route.c ospf6_intra.c ospf6_zebra.c \
 	ospf6_spf.c ospf6_proto.c ospf6_asbr.c ospf6_abr.c ospf6_snmp.c \
-	ospf6d.c ospf6_bfd.c
+	ospf6d.c ospf6_bfd.c ospf6_ipsec.c ospf6_ipsec_cmds.c
 
 noinst_HEADERS = \
 	ospf6_memory.h \
@@ -23,7 +25,10 @@ noinst_HEADERS = \
 	ospf6_top.h ospf6_area.h ospf6_interface.h ospf6_neighbor.h \
 	ospf6_flood.h ospf6_route.h ospf6_intra.h ospf6_zebra.h \
 	ospf6_spf.h ospf6_proto.h ospf6_asbr.h ospf6_abr.h ospf6_snmp.h \
-	ospf6d.h ospf6_bfd.h
+	ospf6d.h ospf6_bfd.h ospf6_ipsec.h
+
+ospf6_ipsec_cmds.c: $(srcdir)/ospf6_ipsec.xml $(srcdir)/../tools/xml2cli.pl
+	@PERL@ $(srcdir)/../tools/xml2cli.pl $(srcdir)/ospf6_ipsec.xml > $@
 
 ospf6d_SOURCES = \
 	ospf6_main.c $(libospf6_a_SOURCES)

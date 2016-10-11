@@ -44,6 +44,7 @@
 #include "ospf6_flood.h"
 #include "ospf6d.h"
 #include "ospf6_bfd.h"
+#include "ospf6_ipsec.h"
 
 #ifdef HAVE_SNMP
 #include "ospf6_snmp.h"
@@ -115,6 +116,7 @@ config_write_ospf6_debug (struct vty *vty)
   config_write_ospf6_debug_asbr (vty);
   config_write_ospf6_debug_abr (vty);
   config_write_ospf6_debug_flood (vty);
+  config_write_ospf6_debug_ipsec (vty);
   vty_out (vty, "!%s", VNL);
   return 0;
 }
@@ -1220,6 +1222,7 @@ ospf6_init (void)
 #endif /*HAVE_SNMP*/
 
   ospf6_bfd_init();
+  ospf6_ipsec_init ();
   install_node (&debug_node, config_write_ospf6_debug);
 
   install_element_ospf6_debug_message ();

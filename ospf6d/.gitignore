@@ -16,3 +16,4 @@ TAGS
 *~
 *.loT
 *.a
+ospf6_ipsec_cmds.c

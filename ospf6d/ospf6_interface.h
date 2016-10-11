@@ -23,6 +23,7 @@
 #define OSPF6_INTERFACE_H
 
 #include "qobj.h"
+#include "ospf6_ipsec.h"
 #include "if.h"
 
 /* Debug option */
@@ -117,6 +118,10 @@ struct ospf6_interface
 
   /* BFD information */
   void *bfd_info;
+
+  /* RFC 4552 authentication */
+  struct ospf6_ipsec ipsec;
+  struct list *ipsec_entries;
 
   QOBJ_FIELDS
 };
