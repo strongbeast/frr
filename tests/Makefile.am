@@ -48,6 +48,8 @@ check_PROGRAMS = \
 	lib/cli/test_cli \
 	lib/cli/test_commands \
 	$(TESTS_BGPD)
+# test-atomlist
+# test-atomsort
 
 ../vtysh/vtysh_cmd.c:
 	$(MAKE) -C ../vtysh vtysh_cmd.c
@@ -90,6 +92,7 @@ lib_cli_test_cli_SOURCES = lib/cli/test_cli.c lib/cli/common_cli.c
 lib_cli_test_commands_SOURCES = lib/cli/test_commands_defun.c \
                                 lib/cli/test_commands.c \
                                 helpers/c/prng.c
+#test_atomlist_SOURCES = atomlist_test.c ../lib/seqlock.c
 bgpd_test_aspath_SOURCES = bgpd/test_aspath.c
 bgpd_test_capability_SOURCES = bgpd/test_capability.c
 bgpd_test_ecommunity_SOURCES = bgpd/test_ecommunity.c

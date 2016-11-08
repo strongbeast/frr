@@ -15,6 +15,7 @@ libfrr_la_LDFLAGS = -version-info 0:0:0
 
 libfrr_la_SOURCES = \
 	seqlock.c \
+	atomlist.c \
 	network.c pid_output.c getopt.c getopt1.c \
 	checksum.c vector.c linklist.c vty.c \
 	graph.c command_parse.y command_lex.l command_match.c \
@@ -83,6 +84,7 @@ pkginclude_HEADERS = \
 	sha256.h \
 	frr_pthread.h \
 	vrf_int.h \
+	atomlist.h \
 	# end
 
 noinst_HEADERS = \
