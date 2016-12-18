@@ -580,7 +580,7 @@ netlink_interface_addr (struct sockaddr_nl *snl, struct nlmsghdr *h,
            * the kernel till IPv6 DAD has completed, but at init time, Quagga
            * does query for and will receive all addresses.
            */
-          if (!(ifa->ifa_flags & (IFA_F_DADFAILED | IFA_F_TENTATIVE)))
+          //if (!(ifa->ifa_flags & (IFA_F_DADFAILED | IFA_F_TENTATIVE)))
             connected_add_ipv6 (ifp, flags, (struct in6_addr *) addr,
                     ifa->ifa_prefixlen, (struct in6_addr *) broad, label);
         }
