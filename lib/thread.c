@@ -30,6 +30,7 @@
 #include "pqueue.h"
 #include "command.h"
 #include "sigevent.h"
+#include "frrcu.h"
 
 DEFINE_MTYPE_STATIC(LIB, THREAD,        "Thread")
 DEFINE_MTYPE_STATIC(LIB, THREAD_MASTER, "Thread master")
@@ -1306,6 +1307,8 @@ thread_fetch (struct thread_master *m, struct thread *fetch)
   struct timeval *timer_wait = &timer_val;
   struct timeval *timer_wait_bg;
 
+  rcu_release();
+
   do
     {
       int num = 0;
@@ -1324,6 +1327,7 @@ thread_fetch (struct thread_master *m, struct thread *fetch)
           if (fetch->ref)
             *fetch->ref = NULL;
           pthread_mutex_unlock (&m->mtx);
+          rcu_hold();
           return fetch;
         }
       
@@ -1371,6 +1375,7 @@ thread_fetch (struct thread_master *m, struct thread *fetch)
             }
           zlog_warn ("select() error: %s", safe_strerror (errno));
           pthread_mutex_unlock (&m->mtx);
+          rcu_hold();
           return NULL;
         }
 
@@ -1408,6 +1413,7 @@ thread_fetch (struct thread_master *m, struct thread *fetch)
           if (fetch->ref)
             *fetch->ref = NULL;
           pthread_mutex_unlock (&m->mtx);
+          rcu_hold();
           return fetch;
         }
 
@@ -1415,6 +1421,7 @@ thread_fetch (struct thread_master *m, struct thread *fetch)
 
     } while (m->spin);
 
+  rcu_hold();
   return NULL;
 }
 
