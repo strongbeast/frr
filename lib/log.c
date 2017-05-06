@@ -147,6 +147,7 @@ quagga_timestamp(int timestamp_precision, char *buf, size_t buflen)
   return 0;
 }
 
+#if 0
 /* Utility routine for current time printing. */
 static void
 time_print(FILE *fp, struct timestamp_control *ctl)
@@ -237,6 +238,7 @@ vzlog (int priority, const char *format, va_list args)
 
   errno = original_errno;
 }
+#endif
 
 int 
 vzlog_test (int priority)
@@ -641,6 +643,7 @@ zlog_backtrace(int priority)
 #endif /* HAVE_GLIBC_BACKTRACE */
 }
 
+#if 0
 void
 zlog (int priority, const char *format, ...)
 {
@@ -672,6 +675,7 @@ ZLOG_FUNC(zlog_notice, LOG_NOTICE)
 ZLOG_FUNC(zlog_debug, LOG_DEBUG)
 
 #undef ZLOG_FUNC
+#endif
 
 void zlog_thread_info (int log_level)
 {
@@ -763,6 +767,7 @@ closezlog (void)
   zlog_default = NULL;
 }
 
+#if 0
 /* Called from command.c. */
 void
 zlog_set_level (zlog_dest_t dest, int log_level)
@@ -850,6 +855,7 @@ zlog_rotate (void)
 
   return 1;
 }
+#endif
 
 /* Message lookup function. */
 const char *

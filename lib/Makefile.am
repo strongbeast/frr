@@ -40,6 +40,7 @@ libfrr_la_SOURCES = \
 	module.c \
 	hook.c \
 	frr_pthread.c \
+	zlog.c \
 	# end
 
 BUILT_SOURCES = route_types.h gitversion.h command_parse.h command_lex.h

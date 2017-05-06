@@ -26,6 +26,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "zlog.h"
+
 /* Here is some guidance on logging levels to use:
  *
  * LOG_DEBUG	- For all messages that are enabled by optional debugging
@@ -76,12 +78,14 @@ extern void closezlog (void);
 #define PRINTF_ATTRIBUTE(a,b)
 #endif /* __GNUC__ */
 
+#if 0
 /* Handy zlog functions. */
 extern void zlog_err (const char *format, ...) PRINTF_ATTRIBUTE(1, 2);
 extern void zlog_warn (const char *format, ...) PRINTF_ATTRIBUTE(1, 2);
 extern void zlog_info (const char *format, ...) PRINTF_ATTRIBUTE(1, 2);
 extern void zlog_notice (const char *format, ...) PRINTF_ATTRIBUTE(1, 2);
 extern void zlog_debug (const char *format, ...) PRINTF_ATTRIBUTE(1, 2);
+#endif
 
 extern void zlog_thread_info (int log_level);
 
@@ -91,6 +95,7 @@ extern void zlog_thread_info (int log_level);
    or zlog_reset_file instead). */
 extern void zlog_set_level (zlog_dest_t, int log_level);
 
+#if 0
 /* Set logging to the given filename at the specified level. */
 extern int zlog_set_file (const char *filename, int log_level);
 /* Disable file logging. */
@@ -98,6 +103,7 @@ extern int zlog_reset_file (void);
 
 /* Rotate log. */
 extern int zlog_rotate (void);
+#endif
 
 /* For hackey message lookup and check */
 #define LOOKUP_DEF(x, y, def) mes_lookup(x, x ## _max, y, def, #x)
