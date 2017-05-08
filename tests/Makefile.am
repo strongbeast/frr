@@ -137,7 +137,7 @@ bgpd_test_capability_LDADD = $(BGP_TEST_LDADD)
 bgpd_test_ecommunity_LDADD = $(BGP_TEST_LDADD)
 bgpd_test_mp_attr_LDADD = $(BGP_TEST_LDADD)
 bgpd_test_mpath_LDADD = $(BGP_TEST_LDADD)
-isisd_test_fuzz_isis_tlv_SOURCES = $(ISISD_TEST_LDADD)
+isisd_test_fuzz_isis_tlv_LDADD = $(ISISD_TEST_LDADD)
 
 EXTRA_DIST = \
     runtests.py \
