@@ -1,0 +1,35 @@
+Unpack log:
+Unpacking 33 bytes of TLVs...
+  Unpacking TLV...
+    Found TLV of type 135 and len 31.
+    Unpacking as item TLV...
+      Unpacking extended IPv4 reachability...
+        Extended IP Reachability:
+          Metric: 216694592
+          Down: No
+          Prefix: 3.16.0.0/24
+          WARNING: subtlv bit is set, but there are no subtlvs.
+      Skipping 0 bytes of subvls      Unpacking extended IPv4 reachability...
+        Extended IP Reachability:
+          Metric: 6160388
+          Down: No
+          Prefix: 0.0.0.0/0
+      Unpacking extended IPv4 reachability...
+        WARNING: Prefix had hostbits set.
+        Extended IP Reachability:
+          Metric: 0
+          Down: No
+          Prefix: 94.94.94.92/30
+      Skipping 7 bytes of subvlsUnpacked TLVs:
+Extended IP Reachability:
+  Metric: 216694592
+  Down: No
+  Prefix: 3.16.0.0/24
+Extended IP Reachability:
+  Metric: 6160388
+  Down: No
+  Prefix: 0.0.0.0/0
+Extended IP Reachability:
+  Metric: 0
+  Down: No
+  Prefix: 94.94.94.92/30

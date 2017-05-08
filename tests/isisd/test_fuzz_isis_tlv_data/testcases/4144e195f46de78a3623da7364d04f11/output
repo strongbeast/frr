@@ -1,0 +1,6 @@
+Unpack log:
+Unpacking 2 bytes of TLVs...
+  Unpacking TLV...
+    Found TLV of type 97 and len 0.
+    Skipping unknown TLV 97 (0 bytes)
+Unpacked TLVs:
