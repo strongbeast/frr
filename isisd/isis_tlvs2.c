@@ -83,7 +83,7 @@ static int pack_item_extended_ip_reach(struct isis_item *i,
 	control |= r->prefix.prefixlen;
 	stream_putc(s, control);
 
-	if (STREAM_WRITEABLE(s) < PSIZE(r->prefix.prefixlen))
+	if (STREAM_WRITEABLE(s) < (unsigned)PSIZE(r->prefix.prefixlen))
 		return 1;
 	stream_put(s, &r->prefix.prefix.s_addr, PSIZE(r->prefix.prefixlen));
 
