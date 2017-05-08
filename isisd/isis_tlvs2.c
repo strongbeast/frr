@@ -4,8 +4,12 @@
 #include "stream.h"
 #include "sbuf.h"
 
+#include "isisd/isisd.h"
+#include "isisd/isis_memory.h"
 #include "isis_tlvs2.h"
 #include "isis_common2.h"
+
+DEFINE_MTYPE_STATIC(ISISD, ISIS_TLV2, "ISIS TLVs (new)")
 
 typedef int(*unpack_tlv_func)(enum isis_tlv_context context,
 			     uint8_t tlv_type, uint8_t tlv_len,
@@ -177,13 +181,13 @@ int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream)
 static void free_item_extended_reach(struct isis_item *i)
 {
 	struct isis_extended_reach *item = (struct isis_extended_reach*)i;
-	XFREE(MTYPE_ISIS_TLV, item);
+	XFREE(MTYPE_ISIS_TLV2, item);
 }
 
 static void free_item_extended_ip_reach(struct isis_item *i)
 {
 	struct isis_extended_ip_reach *item = (struct isis_extended_ip_reach*)i;
-	XFREE(MTYPE_ISIS_TLV, item);
+	XFREE(MTYPE_ISIS_TLV2, item);
 }
 
 static void free_item(enum isis_tlv_context tlv_context,
@@ -221,7 +225,7 @@ void isis_free_tlvs(struct isis_tlvs *tlvs)
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
 		   (struct isis_item*)tlvs->extended_ip_reach);
 
-	XFREE(MTYPE_ISIS_TLV, tlvs);
+	XFREE(MTYPE_ISIS_TLV2, tlvs);
 }
 
 static void format_item_extended_reach(struct isis_item *i,
@@ -245,7 +249,7 @@ static int unpack_item_extended_reach(uint8_t len,
 		goto out;
 	}
 
-	rv = XCALLOC(MTYPE_ISIS_TLV, sizeof(*rv));
+	rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
 	stream_get(rv->id, s, 7);
 	rv->metric = stream_get3(s);
 	subtlv_len = stream_getc(s);
@@ -297,7 +301,7 @@ static int unpack_item_extended_ip_reach(uint8_t len,
 		goto out;
 	}
 
-	rv = XCALLOC(MTYPE_ISIS_TLV, sizeof(*rv));
+	rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
 
 	rv->metric = stream_getl(s);
 	control = stream_getc(s);
@@ -483,7 +487,7 @@ struct isis_tlvs *isis_alloc_tlvs(void)
 {
 	struct isis_tlvs *result;
 
-	result = XCALLOC(MTYPE_ISIS_TLV, sizeof(*result));
+	result = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*result));
 
 	result->extended_reach_next = &result->extended_reach;
 	result->extended_ip_reach_next = &result->extended_ip_reach;
@@ -606,7 +610,7 @@ const char *isis_format_tlvs(struct isis_tlvs *tlvs)
 static struct isis_item *copy_item_extended_reach(struct isis_item *i)
 {
 	struct isis_extended_reach *r = (struct isis_extended_reach*)i;
-	struct isis_extended_reach *rv = XCALLOC(MTYPE_ISIS_TLV, sizeof(*rv));
+	struct isis_extended_reach *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
 
 	memcpy(rv->id, r->id, 7);
 	rv->metric = r->metric;
@@ -620,7 +624,7 @@ static struct isis_item *copy_item_extended_reach(struct isis_item *i)
 static struct isis_item *copy_item_extended_ip_reach(struct isis_item *i)
 {
 	struct isis_extended_ip_reach *r = (struct isis_extended_ip_reach*)i;
-	struct isis_extended_ip_reach *rv = XCALLOC(MTYPE_ISIS_TLV,
+	struct isis_extended_ip_reach *rv = XCALLOC(MTYPE_ISIS_TLV2,
 						    sizeof(*rv));
 
 	rv->metric = r->metric;
@@ -666,7 +670,7 @@ static struct isis_item *copy_items(enum isis_tlv_context context,
 
 struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
 {
-	struct isis_tlvs *rv = XCALLOC(MTYPE_ISIS_TLV, sizeof(*rv));
+	struct isis_tlvs *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
 
 	rv->extended_reach = (struct isis_extended_reach*)copy_items(
 					ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
