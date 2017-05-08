@@ -83,4 +83,83 @@ extern void zlog_delete(struct zlog_target *zt);
 extern void zlog_rotate(void);
 extern void zlog_init(const char *logprefix);
 
+/**************************************************************************
+ * structured key/value logging extensions
+ */
+
+/* encapsulate key name as global symbol for pointer comparison. */
+struct zlogmeta_key {
+	const char *name;
+};
+
+struct zlogmeta_val {
+	struct zlogmeta_key *key;
+	const char *val;
+};
+
+/* stack chain entry for logging metadata.  functions that want to add
+ * metadata put one of these on the stack and link/unlink it on
+ * zlogmeta_stackptr */
+struct zlogmeta_frame {
+	struct zlogmeta_frame *up;
+
+	/* if logprefix is NULL, try up->logprefix.  otherwise, use this
+	 * and end (no chaining of prefixes here - done in formatting) */
+	char *logprefix;
+	size_t logprefixsz;
+
+	/* unlike logprefix, values ARE chained, but only the bottommost
+	 * value is used for each key.  this is static at 8 entries to reduce
+	 * cacheline clobbering. */
+	struct zlogmeta_val val[8];
+};
+
+/*
+ * zlog metadata stack management
+ */
+extern _Thread_local struct zlogmeta_frame *zlogmeta_stackptr;
+
+static inline void zlogmeta_pop(struct zlogmeta_frame *frame)
+{
+	zlogmeta_stackptr = frame->up;
+}
+#define ZLOGMETA_FRAME() \
+	struct zlogmeta_frame zlogmeta_frame \
+		__attribute__((cleanup(zlogmeta_pop))) \
+		= { .up = zlogmeta_stackptr }; \
+	zlogmeta_stackptr = &zlogmeta_frame
+
+/*
+ * log message prefix prepending
+ */
+extern void zlog_prefixf(struct zlogmeta_frame *frame, char *buf, size_t bufsz,
+		const char *fmt, ...)
+	__attribute__ ((format (printf, 4, 5)));
+#define ZLOG_PREFIXF(...) \
+		zlog_prefixf(&zlogmeta_frame, alloca(256), 256, __VA_ARGS__)
+
+/*
+ * key/value log metadata
+ *
+ * use ZLOGMETA if you have a preexisting char * that is guaranteed to
+ * stay alive during the function call - it keeps a copy of the pointer.
+ *
+ * otherwise, use ZLOGMETAF (possibly with "%s" as format string)
+ */
+extern void zlog_meta(struct zlogmeta_frame *frame, struct zlogmeta_key *key,
+		const char *val);
+#define ZLOG_META(key, val)	zlog_meta(&zlogmeta_frame, key, val)
+
+extern void zlog_metaf(struct zlogmeta_frame *frame, struct zlogmeta_key *key,
+		char *buf, size_t bufsz, const char *fmt, ...)
+	__attribute__ ((format (printf, 5, 6)));
+#define ZLOG_METAF(key, ...)	zlog_metaf(&zlogmeta_frame, key, \
+		alloca(256), 256, __VA_ARGS__)
+
+/* global keys */
+extern struct zlogmeta_key zl_VRF;		/* VRF ID */
+extern struct zlogmeta_key zl_REMOTE;		/* remote system / packet address */
+extern struct zlogmeta_key zl_PREFIX;		/* route destination prefix */
+extern struct zlogmeta_key zl_SRCPREFIX;	/* route source prefix (SADR) */
+
 #endif /* _FRR_ZLOG_H */

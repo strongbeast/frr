@@ -1290,8 +1290,8 @@ rib_process_add_fib(struct zebra_vrf *zvrf, struct route_node *rn,
     {
       char buf[SRCDEST2STR_BUFFER];
       srcdest_rnode2str(rn, buf, sizeof(buf));
-      zlog_debug ("%u:%s: Adding route rn %p, rib %p (type %d)",
-                   zvrf_id (zvrf), buf, rn, new, new->type);
+      zlog_debug ("Adding route rn %p, rib %p (type %d)",
+                   rn, new, new->type);
     }
 
   /* If labeled-unicast route, install transit LSP. */
@@ -1548,6 +1548,7 @@ rib_process (struct route_node *rn)
   struct prefix *p, *src_p;
   srcdest_rnode_prefixes(rn, &p, &src_p);
   vrf_id_t vrf_id = VRF_UNKNOWN;
+  ZLOGMETA_FRAME();
 
   assert (rn);
 
@@ -1559,10 +1560,18 @@ rib_process (struct route_node *rn)
     }
 
   if (IS_ZEBRA_DEBUG_RIB)
-    srcdest_rnode2str(rn, buf, sizeof(buf));
+    {
+      ZLOG_METAF(&zl_VRF, "%u", vrf_id);
+
+      prefix2str(p, buf, sizeof(buf)),
+      ZLOG_METAF(&zl_PREFIX, "%s", buf);
+
+      srcdest_rnode2str(rn, buf, sizeof(buf));
+      ZLOG_PREFIXF("%u:%s: ", vrf_id, buf);
+    }
 
   if (IS_ZEBRA_DEBUG_RIB_DETAILED)
-    zlog_debug ("%u:%s: Processing rn %p", vrf_id, buf, rn);
+    zlog_debug ("Processing rn %p", rn);
 
   RNODE_FOREACH_RIB_SAFE (rn, rib, next)
     {

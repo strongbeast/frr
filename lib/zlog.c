@@ -37,8 +37,10 @@ struct zlog_targets_head zlog_targets;
 
 /* global setup */
 
-static char logprefix[128] = "";
+char logprefix[128] = "";
 static size_t logprefixsz = 0;
+
+_Thread_local struct zlogmeta_frame *zlogmeta_stackptr = NULL;
 
 /* message buffering */
 
@@ -55,6 +57,8 @@ struct zlog_msg {
 	char *text;
 	size_t textlen;
 	int prio;
+
+	struct zlogmeta_frame *zlf, *zlf_pfx;
 
 	uint32_t ts_flags;
 	struct timespec ts;
@@ -144,6 +148,10 @@ void vzlog(int prio, const char *fmt, va_list ap)
 
 	msg.prio = prio;
 	msg.text = fixbuf;
+	msg.zlf = msg.zlf_pfx = zlogmeta_stackptr;
+	for (; msg.zlf_pfx; msg.zlf_pfx = msg.zlf_pfx->up)
+		if (msg.zlf_pfx->logprefix)
+			break;
 
 	sz = vsnprintf(msg.text, sizeof(fixbuf), fmt, ap);
 	if (sz < 0)
@@ -164,7 +172,9 @@ void vzlog(int prio, const char *fmt, va_list ap)
 
 		switch (zt->type) {
 		case ZLOG_TARGET_SYSLOG:
-			syslog(prio | zt->syslog_facility, "%s", msg.text);
+			syslog(prio | zt->syslog_facility, "%s%s",
+				msg.zlf_pfx ? msg.zlf_pfx->logprefix : "",
+				msg.text);
 			break;
 		default:
 			zt->logfn(zt, &msg);
@@ -188,7 +198,7 @@ static const char *prionames[] = {
 static void zlog_fd(struct zlog_target *zt, struct zlog_msg *msg)
 {
 	int fd;
-	struct iovec iov[5];
+	struct iovec iov[6];
 	char ts_buf[64];
 
 	iov[0].iov_base = ts_buf;
@@ -202,15 +212,81 @@ static void zlog_fd(struct zlog_target *zt, struct zlog_msg *msg)
 	iov[2].iov_base = logprefix;
 	iov[2].iov_len = logprefixsz;
 
-	iov[3].iov_base = msg->text;
-	iov[3].iov_len = msg->textlen;
+	if (msg->zlf_pfx) {
+		iov[3].iov_base = msg->zlf_pfx->logprefix;
+		iov[3].iov_len = msg->zlf_pfx->logprefixsz;
+	} else {
+		iov[3].iov_base = (char *)"";
+		iov[3].iov_len = 0;
+	}
 
-	iov[4].iov_base = (char *)"\n";
-	iov[4].iov_len = 1;
+	iov[4].iov_base = msg->text;
+	iov[4].iov_len = msg->textlen;
+
+	iov[5].iov_base = (char *)"\n";
+	iov[5].iov_len = 1;
 
 	fd = atomic_load(&zt->fd);
 	writev(fd, iov, array_size(iov));
 }
+
+/*
+ * metadata
+ */
+
+void zlog_prefixf(struct zlogmeta_frame *frame, char *buf, size_t bufsz,
+		const char *fmt, ...)
+{
+	va_list ap;
+	struct zlogmeta_frame *zlf;
+	size_t offs = 0;
+
+	for (zlf = frame ? frame->up : NULL; zlf; zlf = zlf->up)
+		if (zlf->logprefix) {
+			if (bufsz <= zlf->logprefixsz)
+				/* can't append anything */
+				return;
+
+			memcpy(buf, zlf->logprefix, zlf->logprefixsz);
+			offs = zlf->logprefixsz;
+			break;
+		}
+
+	va_start(ap, fmt);
+	frame->logprefix = buf;
+	frame->logprefixsz = offs + vsnprintf(buf + offs, bufsz - offs, fmt, ap);
+	va_end(ap);
+}
+
+void zlog_meta(struct zlogmeta_frame *frame, struct zlogmeta_key *key,
+		const char *val)
+{
+	size_t i;
+	for (i = 0; i < array_size(frame->val); i++)
+		if (frame->val[i].key == key
+		    || frame->val[i].key == NULL) {
+
+			frame->val[i].key = key;
+			frame->val[i].val = val;
+			break;
+		}
+}
+
+void zlog_metaf(struct zlogmeta_frame *frame, struct zlogmeta_key *key,
+		char *buf, size_t bufsz, const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(buf, bufsz, fmt, ap);
+	va_end(ap);
+
+	zlog_meta(frame, key, buf);
+}
+
+struct zlogmeta_key zl_VRF = { "VRF" };
+struct zlogmeta_key zl_REMOTE = { "REMOTE" };
+struct zlogmeta_key zl_PREFIX = { "PREFIX" };
+struct zlogmeta_key zl_SRCPREFIX = { "SRCPREFIX" };
 
 /*
  * (re-)configuration
