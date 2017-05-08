@@ -41,6 +41,7 @@ libfrr_la_SOURCES = \
 	hook.c \
 	frr_pthread.c \
 	termtable.c \
+	sbuf.c \
 	# end
 
 BUILT_SOURCES = route_types.h gitversion.h command_parse.h command_lex.h
@@ -86,6 +87,7 @@ pkginclude_HEADERS = \
 	frr_pthread.h \
 	vrf_int.h \
 	termtable.h \
+	sbuf.h \
 	# end
 
 noinst_HEADERS = \
