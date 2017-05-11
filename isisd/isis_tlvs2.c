@@ -107,6 +107,33 @@ static int pack_item_extended_ip_reach(struct isis_item *i,
 	return 0;
 }
 
+static int pack_item_ipv6_reach(struct isis_item *i,
+				struct stream *s)
+{
+	struct isis_ipv6_reach *r = (struct isis_ipv6_reach*)i;
+	uint8_t control;
+
+	if (STREAM_WRITEABLE(s) < 6)
+		return 1;
+	stream_putl(s, r->metric);
+
+	control = r->down ? ISIS_IPV6_REACH_DOWN : 0;
+	control |= r->external ? ISIS_IPV6_REACH_EXTERNAL : 0;
+#if 0
+	control = |= TODO_HAS_SUBTLV ? ISIS_IPV6_REACH_SUBTLV : 0;
+#endif
+	stream_putc(s, control);
+	stream_putc(s, r->prefix.prefixlen);
+
+	if (STREAM_WRITEABLE(s) < (unsigned)PSIZE(r->prefix.prefixlen))
+		return 1;
+	stream_put(s, &r->prefix.prefix.s6_addr, PSIZE(r->prefix.prefixlen));
+
+	/* TODO: put subtlv */
+
+	return 0;
+}
+
 static int pack_item(enum isis_tlv_context context, enum isis_tlv_type type,
 		     struct isis_item *i, struct stream *s)
 {
@@ -187,6 +214,12 @@ static void free_item_extended_reach(struct isis_item *i)
 static void free_item_extended_ip_reach(struct isis_item *i)
 {
 	struct isis_extended_ip_reach *item = (struct isis_extended_ip_reach*)i;
+	XFREE(MTYPE_ISIS_TLV2, item);
+}
+
+static void free_item_ipv6_reach(struct isis_item *i)
+{
+	struct isis_ipv6_reach *item = (struct isis_ipv6_reach*)i;
 	XFREE(MTYPE_ISIS_TLV2, item);
 }
 
@@ -360,6 +393,92 @@ static int unpack_item_extended_ip_reach(uint8_t len,
 out:
 	if (rv)
 		free_item_extended_ip_reach((struct isis_item*)rv);
+	return 1;
+}
+
+static void format_item_ipv6_reach(struct isis_item *i,
+				   struct sbuf *buf, int indent);
+
+static int unpack_item_ipv6_reach(uint8_t len,
+				  struct stream *s,
+				  struct sbuf *log,
+				  void *dest,
+				  int indent)
+{
+	struct isis_tlvs *tlvs = dest;
+	struct isis_ipv6_reach *rv = NULL;
+	size_t consume;
+	uint8_t control, subtlv_len;
+
+	sbuf_push(log, indent, "Unpacking IPv6 reachability...\n");
+	consume = 6;
+	if (len < consume) {
+		sbuf_push(log, indent, "Not enough data left. "
+		          "(expected 6 or more bytes, got %" PRIu8 ")\n", len);
+		goto out;
+	}
+
+	rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+
+	rv->metric = stream_getl(s);
+	control = stream_getc(s);
+	rv->down = (control & ISIS_IPV6_REACH_DOWN);
+	rv->external = (control & ISIS_IPV6_REACH_EXTERNAL);
+
+	rv->prefix.family = AF_INET6;
+	rv->prefix.prefixlen = stream_getc(s);
+	if (rv->prefix.prefixlen > 128) {
+		sbuf_push(log, indent, "Prefixlen %u is inplausible for IPv6\n",
+		          rv->prefix.prefixlen);
+		goto out;
+	}
+
+	consume += PSIZE(rv->prefix.prefixlen);
+	if (len < consume) {
+		sbuf_push(log, indent, "Expected %u bytes of prefix, but only %u"
+		          " bytes available.\n", PSIZE(rv->prefix.prefixlen),
+		          len - 5);
+		goto out;
+	}
+	stream_get(&rv->prefix.prefix.s6_addr, s, PSIZE(rv->prefix.prefixlen));
+	struct in6_addr orig_prefix = rv->prefix.prefix;
+	apply_mask_ipv6(&rv->prefix);
+	if (memcmp(&orig_prefix, &rv->prefix.prefix, sizeof(orig_prefix)))
+		sbuf_push(log, indent + 2, "WARNING: Prefix had hostbits set.\n");
+	format_item_ipv6_reach((struct isis_item*)rv, log, indent + 2);
+
+	if (control & ISIS_IPV6_REACH_SUBTLV) {
+		consume += 1;
+		if (len < consume) {
+			sbuf_push(log, indent, "Expected 1 byte of subtlv len, but "
+			          "no more data persent.\n");
+			goto out;
+		}
+		subtlv_len = stream_getc(s);
+
+		if (!subtlv_len) {
+			sbuf_push(log, indent + 2, "  WARNING: subtlv bit set, but "
+				  "there are no subtlvs.\n");
+		}
+		consume += subtlv_len;
+		if (len < consume) {
+			sbuf_push(log, indent, "Expected %" PRIu8 " bytes of subtlvs,"
+			          " but only %u bytes available.\n",
+			          subtlv_len,
+			          len - 6 - PSIZE(rv->prefix.prefixlen));
+			goto out;
+		}
+		sbuf_push(log, indent, "Skipping %" PRIu8 " bytes of subtlvs",
+			  subtlv_len);
+		stream_forward_getp(s, subtlv_len);
+	}
+
+	*tlvs->ipv6_reach_next = rv;
+	tlvs->ipv6_reach_next = &rv->next;
+	return 0;
+out:
+	if (rv)
+		free_item_ipv6_reach((struct isis_item*)rv);
 	return 1;
 }
 
@@ -561,6 +680,27 @@ static void format_item_extended_ip_reach(struct isis_item *i,
 #endif
 }
 
+static void format_item_ipv6_reach(struct isis_item *i,
+                                  struct sbuf *buf, int indent)
+{
+	struct isis_ipv6_reach *r = (struct isis_ipv6_reach*)r;
+	char prefixbuf[PREFIX2STR_BUFFER];
+
+	sbuf_push(buf, indent, "IPv6 Reachability:\n");
+	sbuf_push(buf, indent, "  Metric: %u\n", r->metric);
+	sbuf_push(buf, indent, "  Down: %s\n", r->down ? "Yes" : "No");
+	sbuf_push(buf, indent, "  External: %s\n", r->external ? "Yes" : "No");
+	sbuf_push(buf, indent, "  Prefix: %s\n", prefix2str(&r->prefix, prefixbuf,
+	                                                    sizeof(prefixbuf)));
+
+#if 0
+	if (r->subtlvs) {
+		sbuf_push(buf, indent, "  Subtlvs:\n");
+		format_tlvs(r->subtlvs, buf, indent + 4);
+	}
+#endif
+}
+
 static void format_item(enum isis_tlv_context context,
 			enum isis_tlv_type type, struct isis_item *i,
 			struct sbuf *buf, int indent)
@@ -637,6 +777,22 @@ static struct isis_item *copy_item_extended_ip_reach(struct isis_item *i)
 	return (struct isis_item*)rv;
 }
 
+static struct isis_item *copy_item_ipv6_reach(struct isis_item *i)
+{
+	struct isis_ipv6_reach *r = (struct isis_ipv6_reach*)i;
+	struct isis_ipv6_reach *rv = XCALLOC(MTYPE_ISIS_TLV2,
+	                                     sizeof(*rv));
+	rv->metric = r->metric;
+	rv->down = r->down;
+	rv->external = r->external;
+	rv->prefix = r->prefix;
+#if 0
+	rv->subtlvs = isis_copy_tlvs(r->subtlvs);
+#endif
+
+	return (struct isis_item*)rv;
+}
+
 static struct isis_item *copy_item(enum isis_tlv_context context,
 				   enum isis_tlv_type type,
 				   struct isis_item *item)
@@ -702,11 +858,13 @@ struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
 
 ITEM_TLV_OPS(extended_reach, "TLV 22 Extended Reachability");
 ITEM_TLV_OPS(extended_ip_reach, "TLV 135 Extended IP Reachability");
+ITEM_TLV_OPS(ipv6_reach, "TLV 236 IPv6 Reachability");
 
 static const struct tlv_ops *tlv_table[ISIS_CONTEXT_MAX][ISIS_TLV_MAX] = {
 	[ISIS_CONTEXT_LSP] = {
 		[ISIS_TLV_EXTENDED_REACH] = &tlv_extended_reach_ops,
 		[ISIS_TLV_EXTENDED_IP_REACH] = &tlv_extended_ip_reach_ops,
+		[ISIS_TLV_IPV6_REACH] = &tlv_ipv6_reach_ops,
 	},
 	[ISIS_CONTEXT_SUBTLV_NE_REACH] = {
 	},

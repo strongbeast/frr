@@ -20,6 +20,17 @@ struct isis_extended_ip_reach {
 	struct prefix_ipv4 prefix;
 };
 
+struct isis_ipv6_reach;
+struct isis_ipv6_reach {
+	struct isis_ipv6_reach *next;
+
+	uint32_t metric;
+	bool down;
+	bool external;
+
+	struct prefix_ipv6 prefix;
+};
+
 struct isis_item;
 struct isis_item {
 	struct isis_item *next;
@@ -30,12 +41,15 @@ struct isis_tlvs {
 	struct isis_extended_reach **extended_reach_next;
 	struct isis_extended_ip_reach *extended_ip_reach;
 	struct isis_extended_ip_reach **extended_ip_reach_next;
+	struct isis_ipv6_reach *ipv6_reach;
+	struct isis_ipv6_reach **ipv6_reach_next;
 };
 
 enum isis_tlv_context {
 	ISIS_CONTEXT_LSP,
 	ISIS_CONTEXT_SUBTLV_NE_REACH,
 	ISIS_CONTEXT_SUBTLV_IP_REACH,
+	ISIS_CONTEXT_SUBTLV_IPV6_REACH,
 	ISIS_CONTEXT_MAX
 };
 
@@ -43,6 +57,7 @@ enum isis_tlv_type {
 	ISIS_TLV_PADDING = 8,
 	ISIS_TLV_EXTENDED_REACH = 22,
 	ISIS_TLV_EXTENDED_IP_REACH = 135,
+	ISIS_TLV_IPV6_REACH = 236,
 	ISIS_TLV_MAX = 256
 };
 
@@ -59,5 +74,9 @@ struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs);
 
 #define ISIS_EXTENDED_IP_REACH_DOWN 0x80
 #define ISIS_EXTENDED_IP_REACH_SUBTLV 0x40
+
+#define ISIS_IPV6_REACH_DOWN 0x80
+#define ISIS_IPV6_REACH_EXTERNAL 0x40
+#define ISIS_IPV6_REACH_SUBTLV 0x20
 
 #endif
