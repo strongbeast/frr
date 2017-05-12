@@ -3,6 +3,8 @@
 
 #include "prefix.h"
 
+struct isis_subtlvs;
+
 struct isis_extended_reach;
 struct isis_extended_reach {
 	struct isis_extended_reach *next;
@@ -29,6 +31,8 @@ struct isis_ipv6_reach {
 	bool external;
 
 	struct prefix_ipv6 prefix;
+
+	struct isis_subtlvs *subtlvs;
 };
 
 struct isis_item;
@@ -45,6 +49,11 @@ struct isis_tlvs {
 	struct isis_ipv6_reach **ipv6_reach_next;
 };
 
+struct isis_subtlvs {
+	/* draft-baker-ipv6-isis-dst-src-routing-06 */
+	struct prefix_ipv6 *source_prefix;
+};
+
 enum isis_tlv_context {
 	ISIS_CONTEXT_LSP,
 	ISIS_CONTEXT_SUBTLV_NE_REACH,
@@ -58,7 +67,9 @@ enum isis_tlv_type {
 	ISIS_TLV_EXTENDED_REACH = 22,
 	ISIS_TLV_EXTENDED_IP_REACH = 135,
 	ISIS_TLV_IPV6_REACH = 236,
-	ISIS_TLV_MAX = 256
+	ISIS_TLV_MAX = 256,
+
+	ISIS_SUBTLV_IPV6_SOURCE_PREFIX = 22
 };
 
 struct stream;
