@@ -202,6 +202,11 @@ int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream)
 	if (rv)
 		return rv;
 
+	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
+			(struct isis_item*)tlvs->ipv6_reach, stream);
+	if (rv)
+		return rv;
+
 	return 0;
 }
 
@@ -257,6 +262,8 @@ void isis_free_tlvs(struct isis_tlvs *tlvs)
 		   (struct isis_item*)tlvs->extended_reach);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
 		   (struct isis_item*)tlvs->extended_ip_reach);
+	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
+		   (struct isis_item*)tlvs->ipv6_reach);
 
 	XFREE(MTYPE_ISIS_TLV2, tlvs);
 }
@@ -610,6 +617,7 @@ struct isis_tlvs *isis_alloc_tlvs(void)
 
 	result->extended_reach_next = &result->extended_reach;
 	result->extended_ip_reach_next = &result->extended_ip_reach;
+	result->ipv6_reach_next = &result->ipv6_reach;
 	return result;
 }
 
@@ -683,7 +691,7 @@ static void format_item_extended_ip_reach(struct isis_item *i,
 static void format_item_ipv6_reach(struct isis_item *i,
                                   struct sbuf *buf, int indent)
 {
-	struct isis_ipv6_reach *r = (struct isis_ipv6_reach*)r;
+	struct isis_ipv6_reach *r = (struct isis_ipv6_reach*)i;
 	char prefixbuf[PREFIX2STR_BUFFER];
 
 	sbuf_push(buf, indent, "IPv6 Reachability:\n");
@@ -732,6 +740,9 @@ static void format_tlvs(struct isis_tlvs *tlvs, struct sbuf *buf, int indent)
 		     buf, indent);
 	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
 		     (struct isis_item*)tlvs->extended_ip_reach,
+		     buf, indent);
+	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
+		     (struct isis_item*)tlvs->ipv6_reach,
 		     buf, indent);
 }
 
@@ -834,6 +845,10 @@ struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
 	rv->extended_ip_reach = (struct isis_extended_ip_reach*)copy_items(
 					ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
 					(struct isis_item*)tlvs->extended_ip_reach);
+	rv->ipv6_reach = (struct isis_ipv6_reach*)copy_items(
+					ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
+					(struct isis_item*)tlvs->ipv6_reach);
+	/* TODO: update next pointers */
 
 	return rv;
 }
