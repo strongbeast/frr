@@ -51,9 +51,6 @@ static int test(FILE *input, FILE *output)
 
 	if (isis_pack_tlvs(tlv_copy, s2)) {
 		fprintf(output, "Could not pack TLVs.\n");
-		stream_free(s);
-		stream_free(s2);
-		isis_free_tlvs(tlv_copy);
 		assert(0);
 	}
 
@@ -61,10 +58,6 @@ static int test(FILE *input, FILE *output)
 	rv = isis_unpack_tlvs(STREAM_READABLE(s2), s2, &tlvs, &log);
 	if (rv) {
 		fprintf(output, "Could not unpack own TLVs:\n%s\n", log);
-		isis_free_tlvs(tlvs);
-		isis_free_tlvs(tlv_copy);
-		stream_free(s);
-		stream_free(s2);
 		assert(0);
 	}
 
@@ -73,11 +66,7 @@ static int test(FILE *input, FILE *output)
 
 	if (strcmp(orig_tlvs, s_tlvs)) {
 		fprintf(output, "Deserialized and Serialized LSP seem to differ.\n");
-		XFREE(MTYPE_TMP, orig_tlvs);
-		isis_free_tlvs(tlvs);
-		isis_free_tlvs(tlv_copy);
-		stream_free(s);
-		stream_free(s2);
+		fprintf(output, "Re-Unpacked TLVs:\n%s", s_tlvs);
 		assert(0);
 	}
 
