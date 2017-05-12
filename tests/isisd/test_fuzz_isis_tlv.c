@@ -54,7 +54,7 @@ static int test(FILE *input, FILE *output)
 		stream_free(s);
 		stream_free(s2);
 		isis_free_tlvs(tlv_copy);
-		return 3;
+		assert(0);
 	}
 
 	stream_set_getp(s2, 0);
@@ -65,7 +65,7 @@ static int test(FILE *input, FILE *output)
 		isis_free_tlvs(tlv_copy);
 		stream_free(s);
 		stream_free(s2);
-		return 4;
+		assert(0);
 	}
 
 	char *orig_tlvs = XSTRDUP(MTYPE_TMP, s_tlvs);
@@ -78,7 +78,7 @@ static int test(FILE *input, FILE *output)
 		isis_free_tlvs(tlv_copy);
 		stream_free(s);
 		stream_free(s2);
-		return 5;
+		assert(0);
 	}
 
 	XFREE(MTYPE_TMP, orig_tlvs);
