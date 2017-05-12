@@ -9,11 +9,23 @@
 
 #define TEST_STREAM_SIZE 1500
 
+static bool atexit_registered;
+
+static void show_meminfo_at_exit(void)
+{
+	log_memstats_stderr("isis fuzztest");
+}
+
 static int test(FILE *input, FILE *output)
 {
 	struct stream *s = stream_new(TEST_STREAM_SIZE);
 	char buf[TEST_STREAM_SIZE];
 	size_t bytes_read = 0;
+
+	if (!atexit_registered) {
+		atexit(show_meminfo_at_exit);
+		atexit_registered = true;
+	}
 
 	while (STREAM_WRITEABLE(s) && !feof(input)) {
 		bytes_read = fread(buf, 1, STREAM_WRITEABLE(s), input);

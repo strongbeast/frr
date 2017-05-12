@@ -613,6 +613,12 @@ static int unpack_subtlv_ipv6_source_prefix(enum isis_tlv_context context,
 	}
 
 	p.prefixlen = stream_getc(s);
+	if (p.prefixlen > 128) {
+		sbuf_push(log, indent, "Prefixlen %u is inplausible for IPv6\n",
+		          p.prefixlen);
+		return 1;
+	}
+
 	if (tlv_len != 1 + PSIZE(p.prefixlen)) {
 		sbuf_push(log, indent, "TLV size differs from expected size for the prefixlen. "
 		          "(expected %u but got %" PRIu8 ")\n", 1 + PSIZE(p.prefixlen), tlv_len);
