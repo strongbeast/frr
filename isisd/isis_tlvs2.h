@@ -52,6 +52,9 @@ struct isis_item_list {
 
 RB_HEAD(isis_mt_item_list, isis_item_list);
 
+struct isis_item_list *isis_get_mt_items(struct isis_mt_item_list *m, uint32_t mtid);
+struct isis_item_list *isis_lookup_mt_items(struct isis_mt_item_list *m, uint32_t mtid);
+
 struct isis_tlvs {
 	struct isis_item_list extended_reach;
 	struct isis_mt_item_list mt_reach;

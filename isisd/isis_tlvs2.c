@@ -11,6 +11,7 @@
 
 DEFINE_MTYPE_STATIC(ISISD, ISIS_TLV2, "ISIS TLVs (new)")
 DEFINE_MTYPE_STATIC(ISISD, ISIS_SUBTLV, "ISIS Sub-TLVs")
+DEFINE_MTYPE_STATIC(ISISD, ISIS_MT_ITEM_LIST, "ISIS MT Item Lists")
 
 typedef int(*unpack_tlv_func)(enum isis_tlv_context context,
 			     uint8_t tlv_type, uint8_t tlv_len,
@@ -46,6 +47,51 @@ static int isis_mt_item_list_cmp(struct isis_item_list *a, struct isis_item_list
 }
 
 RB_GENERATE_STATIC(isis_mt_item_list, isis_item_list, mt_tree, isis_mt_item_list_cmp);
+
+static void init_item_list(struct isis_item_list *items)
+{
+	items->head = NULL;
+	items->tail = &items->head;
+}
+
+struct isis_item_list *isis_get_mt_items(struct isis_mt_item_list *m, uint32_t mtid)
+{
+	struct isis_item_list *rv;
+
+	rv = isis_lookup_mt_items(m, mtid);
+	if (!rv) {
+		rv = XMALLOC(MTYPE_ISIS_MT_ITEM_LIST, sizeof(*rv));
+		init_item_list(rv);
+		rv->mtid = mtid;
+		RB_INSERT(isis_mt_item_list, m, rv);
+	}
+
+	return rv;
+}
+
+struct isis_item_list *isis_lookup_mt_items(struct isis_mt_item_list *m, uint32_t mtid)
+{
+	struct isis_item_list key = {
+		.mtid = mtid
+	};
+
+	return RB_FIND(isis_mt_item_list, m, &key);
+}
+
+static void free_items(enum isis_tlv_context context, enum isis_tlv_type type,
+		       struct isis_item_list *items);
+
+static void free_mt_items(enum isis_tlv_context context, enum isis_tlv_type type,
+                          struct isis_mt_item_list *m)
+{
+	struct isis_item_list *n, *nnext;
+
+	RB_FOREACH_SAFE(n, isis_mt_item_list, m, nnext) {
+		free_items(context, type, n);
+		RB_REMOVE(isis_mt_item_list, m, n);
+		XFREE(MTYPE_ISIS_MT_ITEM_LIST, n);
+	}
+}
 
 /* This is a forward definition. The table is actually filled
  * in at the bottom. */
@@ -321,10 +367,16 @@ void isis_free_tlvs(struct isis_tlvs *tlvs)
 
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
 		   &tlvs->extended_reach);
+	free_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
+		   &tlvs->mt_reach);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
 		   &tlvs->extended_ip_reach);
+	free_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
+		   &tlvs->mt_ip_reach);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
 		   &tlvs->ipv6_reach);
+	free_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
+		   &tlvs->mt_ipv6_reach);
 
 	XFREE(MTYPE_ISIS_TLV2, tlvs);
 }
@@ -725,12 +777,6 @@ static int unpack_tlvs(enum isis_tlv_context context,
 	}
 
 	return 0;
-}
-
-static void init_item_list(struct isis_item_list *items)
-{
-	items->head = NULL;
-	items->tail = &items->head;
 }
 
 struct isis_tlvs *isis_alloc_tlvs(void)
