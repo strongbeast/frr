@@ -4,10 +4,18 @@
 
 #include "memory.h"
 #include "stream.h"
+#include "thread.h"
 
+#include "isisd/isis_circuit.h"
 #include "isisd/isis_tlvs2.h"
 
 #define TEST_STREAM_SIZE 1500
+
+struct thread_master *master;
+int isis_sock_init(struct isis_circuit *circuit)
+{
+	return 0;
+}
 
 static bool atexit_registered;
 

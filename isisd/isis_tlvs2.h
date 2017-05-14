@@ -46,14 +46,14 @@ struct isis_item_list {
 	struct isis_item *head;
 	struct isis_item **tail;
 
-	uint32_t mtid;
 	RB_ENTRY(isis_item_list) mt_tree;
+	uint16_t mtid;
 };
 
 RB_HEAD(isis_mt_item_list, isis_item_list);
 
-struct isis_item_list *isis_get_mt_items(struct isis_mt_item_list *m, uint32_t mtid);
-struct isis_item_list *isis_lookup_mt_items(struct isis_mt_item_list *m, uint32_t mtid);
+struct isis_item_list *isis_get_mt_items(struct isis_mt_item_list *m, uint16_t mtid);
+struct isis_item_list *isis_lookup_mt_items(struct isis_mt_item_list *m, uint16_t mtid);
 
 struct isis_tlvs {
 	struct isis_item_list extended_reach;
@@ -81,11 +81,19 @@ enum isis_tlv_type {
 	ISIS_TLV_PADDING = 8,
 	ISIS_TLV_EXTENDED_REACH = 22,
 	ISIS_TLV_EXTENDED_IP_REACH = 135,
+	ISIS_TLV_MT_REACH = 222,
+	ISIS_TLV_MT_IP_REACH = 235,
 	ISIS_TLV_IPV6_REACH = 236,
+	ISIS_TLV_MT_IPV6_REACH = 237,
 	ISIS_TLV_MAX = 256,
 
 	ISIS_SUBTLV_IPV6_SOURCE_PREFIX = 22
 };
+
+#define IS_COMPAT_MT_TLV(tlv_type) \
+	(  (tlv_type == ISIS_TLV_MT_REACH) \
+	 ||(tlv_type == ISIS_TLV_MT_IP_REACH) \
+	 ||(tlv_type == ISIS_TLV_MT_IPV6_REACH))
 
 struct stream;
 int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream);
