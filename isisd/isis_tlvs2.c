@@ -36,6 +36,17 @@ struct tlv_ops {
 	copy_item_func copy_item;
 };
 
+static int isis_mt_item_list_cmp(struct isis_item_list *a, struct isis_item_list *b)
+{
+	if (a->mtid < b->mtid)
+		return -1;
+	if (a->mtid > b->mtid)
+		return 1;
+	return 0;
+}
+
+RB_GENERATE_STATIC(isis_mt_item_list, isis_item_list, mt_tree, isis_mt_item_list_cmp);
+
 /* This is a forward definition. The table is actually filled
  * in at the bottom. */
 static const struct tlv_ops *tlv_table[ISIS_CONTEXT_MAX][ISIS_TLV_MAX];
@@ -185,13 +196,13 @@ static int pack_item(enum isis_tlv_context context, enum isis_tlv_type type,
 }
 
 static int pack_items(enum isis_tlv_context context, enum isis_tlv_type type,
-		      struct isis_item *items, struct stream *s)
+		      struct isis_item_list *items, struct stream *s)
 {
 	size_t len_pos, last_len, len;
 	struct isis_item *item = NULL;
 	int rv;
 
-	if (!items)
+	if (!items->head)
 		return 0;
 
 top:
@@ -202,7 +213,7 @@ top:
 	stream_putc(s, 0); /* Put 0 as length for now */
 
 	last_len = len = 0;
-	for (item = item ? item : items; item; item = item->next) {
+	for (item = item ? item : items->head; item; item = item->next) {
 		rv = pack_item(context, type, item, s);
 		if (rv)
 			return rv;
@@ -231,17 +242,17 @@ int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream)
 	int rv;
 
 	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
-			(struct isis_item*)tlvs->extended_reach, stream);
+			&tlvs->extended_reach, stream);
 	if (rv)
 		return rv;
 
 	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
-			(struct isis_item*)tlvs->extended_ip_reach, stream);
+			&tlvs->extended_ip_reach, stream);
 	if (rv)
 		return rv;
 
 	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
-			(struct isis_item*)tlvs->ipv6_reach, stream);
+			&tlvs->ipv6_reach, stream);
 	if (rv)
 		return rv;
 
@@ -293,11 +304,11 @@ static void free_item(enum isis_tlv_context tlv_context,
 }
 
 static void free_items(enum isis_tlv_context context, enum isis_tlv_type type,
-		       struct isis_item *items)
+		       struct isis_item_list *items)
 {
 	struct isis_item *item, *next_item;
 
-	for (item = items; item; item = next_item) {
+	for (item = items->head; item; item = next_item) {
 		next_item = item->next;
 		free_item(context, type, item);
 	}
@@ -309,13 +320,19 @@ void isis_free_tlvs(struct isis_tlvs *tlvs)
 		return;
 
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
-		   (struct isis_item*)tlvs->extended_reach);
+		   &tlvs->extended_reach);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
-		   (struct isis_item*)tlvs->extended_ip_reach);
+		   &tlvs->extended_ip_reach);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
-		   (struct isis_item*)tlvs->ipv6_reach);
+		   &tlvs->ipv6_reach);
 
 	XFREE(MTYPE_ISIS_TLV2, tlvs);
+}
+
+static void append_item(struct isis_item_list *dest, struct isis_item *item)
+{
+	*dest->tail = item;
+	dest->tail = &(*dest->tail)->next;
 }
 
 static struct isis_subtlvs *isis_alloc_subtlvs(void);
@@ -363,9 +380,7 @@ static int unpack_item_extended_reach(uint8_t len,
 
 	stream_forward_getp(s, subtlv_len);
 
-	*tlvs->extended_reach_next = rv;
-	tlvs->extended_reach_next = &rv->next;
-
+	append_item(&tlvs->extended_reach, (struct isis_item*)rv);
 	return 0;
 out:
 	if (rv)
@@ -449,8 +464,7 @@ static int unpack_item_extended_ip_reach(uint8_t len,
 		stream_forward_getp(s, subtlv_len);
 	}
 
-	*tlvs->extended_ip_reach_next = rv;
-	tlvs->extended_ip_reach_next = &rv->next;
+	append_item(&tlvs->extended_ip_reach, (struct isis_item*)rv);
 	return 0;
 out:
 	if (rv)
@@ -538,8 +552,7 @@ static int unpack_item_ipv6_reach(uint8_t len,
 		}
 	}
 
-	*tlvs->ipv6_reach_next = rv;
-	tlvs->ipv6_reach_next = &rv->next;
+	append_item(&tlvs->ipv6_reach, (struct isis_item*)rv);
 	return 0;
 out:
 	if (rv)
@@ -714,15 +727,25 @@ static int unpack_tlvs(enum isis_tlv_context context,
 	return 0;
 }
 
+static void init_item_list(struct isis_item_list *items)
+{
+	items->head = NULL;
+	items->tail = &items->head;
+}
+
 struct isis_tlvs *isis_alloc_tlvs(void)
 {
 	struct isis_tlvs *result;
 
 	result = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*result));
 
-	result->extended_reach_next = &result->extended_reach;
-	result->extended_ip_reach_next = &result->extended_ip_reach;
-	result->ipv6_reach_next = &result->ipv6_reach;
+	init_item_list(&result->extended_reach);
+	RB_INIT(&result->mt_reach);
+	init_item_list(&result->extended_ip_reach);
+	RB_INIT(&result->mt_ip_reach);
+	init_item_list(&result->ipv6_reach);
+	RB_INIT(&result->mt_ipv6_reach);
+
 	return result;
 }
 
@@ -852,25 +875,25 @@ static void format_item(enum isis_tlv_context context,
 }
 
 static void format_items(enum isis_tlv_context context,
-			 enum isis_tlv_type type, struct isis_item *items,
+			 enum isis_tlv_type type, struct isis_item_list *items,
 			 struct sbuf *buf, int indent)
 {
 	struct isis_item *i;
 
-	for (i = items; i; i = i->next)
+	for (i = items->head; i; i = i->next)
 		format_item(context, type, i, buf, indent);
 }
 
 static void format_tlvs(struct isis_tlvs *tlvs, struct sbuf *buf, int indent)
 {
 	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
-		     (struct isis_item*)tlvs->extended_reach,
+		     &tlvs->extended_reach,
 		     buf, indent);
 	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
-		     (struct isis_item*)tlvs->extended_ip_reach,
+		     &tlvs->extended_ip_reach,
 		     buf, indent);
 	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
-		     (struct isis_item*)tlvs->ipv6_reach,
+		     &tlvs->ipv6_reach,
 		     buf, indent);
 }
 
@@ -966,38 +989,28 @@ static struct isis_item *copy_item(enum isis_tlv_context context,
 	return NULL;
 }
 
-static struct isis_item *copy_items(enum isis_tlv_context context,
-				    enum isis_tlv_type type,
-				    struct isis_item *items)
+static void copy_items(enum isis_tlv_context context, enum isis_tlv_type type,
+                       struct isis_item_list *src, struct isis_item_list *dest)
 {
 	struct isis_item *item;
-	struct isis_item **target;
-	struct isis_item *rv = NULL;
 
-	target = &rv;
+	init_item_list(dest);
 
-	for (item = items; item; item = item->next) {
-		*target = copy_item(context, type, item);
-		target = &(*target)->next;
+	for (item = src->head; item; item = item->next) {
+		append_item(dest, copy_item(context, type, item));
 	}
-
-	return (struct isis_item*)rv;
 }
 
 struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
 {
 	struct isis_tlvs *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
 
-	rv->extended_reach = (struct isis_extended_reach*)copy_items(
-					ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
-					(struct isis_item*)tlvs->extended_reach);
-	rv->extended_ip_reach = (struct isis_extended_ip_reach*)copy_items(
-					ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
-					(struct isis_item*)tlvs->extended_ip_reach);
-	rv->ipv6_reach = (struct isis_ipv6_reach*)copy_items(
-					ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
-					(struct isis_item*)tlvs->ipv6_reach);
-	/* TODO: update next pointers */
+	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
+	           &tlvs->extended_reach, &rv->extended_reach);
+	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
+	           &tlvs->extended_ip_reach, &rv->extended_ip_reach);
+	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
+	           &tlvs->ipv6_reach, &rv->ipv6_reach);
 
 	return rv;
 }

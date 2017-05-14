@@ -1,6 +1,7 @@
 #ifndef ISIS_TLVS2_H
 #define ISIS_TLVS2_H
 
+#include "openbsd-tree.h"
 #include "prefix.h"
 
 struct isis_subtlvs;
@@ -40,13 +41,24 @@ struct isis_item {
 	struct isis_item *next;
 };
 
+struct isis_item_list;
+struct isis_item_list {
+	struct isis_item *head;
+	struct isis_item **tail;
+
+	uint32_t mtid;
+	RB_ENTRY(isis_item_list) mt_tree;
+};
+
+RB_HEAD(isis_mt_item_list, isis_item_list);
+
 struct isis_tlvs {
-	struct isis_extended_reach *extended_reach;
-	struct isis_extended_reach **extended_reach_next;
-	struct isis_extended_ip_reach *extended_ip_reach;
-	struct isis_extended_ip_reach **extended_ip_reach_next;
-	struct isis_ipv6_reach *ipv6_reach;
-	struct isis_ipv6_reach **ipv6_reach_next;
+	struct isis_item_list extended_reach;
+	struct isis_mt_item_list mt_reach;
+	struct isis_item_list extended_ip_reach;
+	struct isis_mt_item_list mt_ip_reach;
+	struct isis_item_list ipv6_reach;
+	struct isis_mt_item_list mt_ipv6_reach;
 };
 
 struct isis_subtlvs {
