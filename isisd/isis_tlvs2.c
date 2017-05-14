@@ -664,7 +664,7 @@ static int unpack_item_ipv6_reach(uint16_t mtid, uint8_t len,
 	if (len < consume) {
 		sbuf_push(log, indent, "Expected %u bytes of prefix, but only %u"
 		          " bytes available.\n", PSIZE(rv->prefix.prefixlen),
-		          len - 5);
+		          len - 6);
 		goto out;
 	}
 	stream_get(&rv->prefix.prefix.s6_addr, s, PSIZE(rv->prefix.prefixlen));
@@ -735,11 +735,12 @@ static int unpack_tlv_with_items(enum isis_tlv_context context,
                                  void *dest,
                                  int indent)
 {
-	size_t items_start;
+	size_t tlv_start;
 	size_t tlv_pos;
 	int rv;
 	uint16_t mtid;
 
+	tlv_start = stream_get_getp(s);
 	tlv_pos = 0;
 
 	if (IS_COMPAT_MT_TLV(tlv_type)) {
@@ -756,8 +757,6 @@ static int unpack_tlv_with_items(enum isis_tlv_context context,
 		mtid = ISIS_MT_IPV4_UNICAST;
 	}
 
-
-	items_start = stream_get_getp(s);
 	while (tlv_pos < (size_t)tlv_len) {
 		rv = unpack_item(mtid, context, tlv_type,
 				 tlv_len - tlv_pos, s,
@@ -765,7 +764,7 @@ static int unpack_tlv_with_items(enum isis_tlv_context context,
 		if (rv)
 			return rv;
 
-		tlv_pos = stream_get_getp(s) - items_start;
+		tlv_pos = stream_get_getp(s) - tlv_start;
 	}
 
 	return 0;
