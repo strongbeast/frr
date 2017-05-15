@@ -148,7 +148,7 @@ EXTRA_DIST = \
     bgpd/test_mpath.py \
     helpers/python/frrsix.py \
     helpers/python/frrtest.py \
-    isisd/isisd_test_fuzz_isis_tlv.py \
+    isisd/test_fuzz_isis_tlv.py \
     lib/cli/test_commands.in \
     lib/cli/test_commands.py \
     lib/cli/test_commands.refout \
