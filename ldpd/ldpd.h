@@ -148,7 +148,8 @@ enum imsg_type {
 	IMSG_ACL_CHECK,
 	IMSG_GET_LABEL_CHUNK,
 	IMSG_RELEASE_LABEL_CHUNK,
-	IMSG_INIT
+	IMSG_INIT,
+	IMSG_PW_UPDATE
 };
 
 struct ldpd_init {
@@ -545,13 +546,18 @@ struct kroute {
 };
 
 struct kpw {
+	char                     ifname[IF_NAMESIZE];
 	unsigned short		 ifindex;
 	int			 pw_type;
+	struct in_addr           lsr_id;
 	int			 af;
 	union ldpd_addr		 nexthop;
 	uint32_t		 local_label;
 	uint32_t		 remote_label;
 	uint8_t			 flags;
+	uint32_t                 pwid;
+	char			 vpn_name[L2VPN_NAME_LEN];
+	unsigned short           ac_port_ifindex;
 };
 
 struct kaddr {
