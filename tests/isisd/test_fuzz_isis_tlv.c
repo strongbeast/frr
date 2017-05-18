@@ -12,6 +12,7 @@
 #define TEST_STREAM_SIZE 1500
 
 struct thread_master *master;
+int isis_sock_init(struct isis_circuit *circuit);
 int isis_sock_init(struct isis_circuit *circuit)
 {
 	return 0;

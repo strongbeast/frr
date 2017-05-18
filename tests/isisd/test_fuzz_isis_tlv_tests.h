@@ -11,11 +11,13 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include <errno.h>
+#include <unistd.h>
 
 struct testcase {
-	char *input;
+	const char *input;
 	size_t input_len;
-	char *output;
+	const char *output;
 	size_t output_len;
 	int ret;
 };
@@ -1253,17 +1255,55 @@ static int test(FILE *input, FILE *output);
 static int run_testcase(int id, bool verbose)
 {
 	struct testcase *t = &testcases[id];
-	char *output = NULL;
-	size_t output_len = 0;
-	FILE *o = open_memstream(&output, &output_len);
-	FILE *i = fmemopen(t->input, t->input_len, "r");
+	char temp_file_name[] = "/tmp/wuschl-XXXXXX";
+	int temp_file = mkstemp(temp_file_name);
+	if (temp_file < 0) {
+		printf("Couldn't create tmpfile to run test %d: %s\n",
+		       id, strerror(errno));
+		return 1;
+	}
+	FILE *o = fdopen(temp_file, "w+");
+	if (!o) {
+		printf("Couldn't open file to run test %d: %s\n",
+		       id, strerror(errno));
+		return 1;
+	}
+	union {
+		const char *con;
+		char *non_con;
+	} convert = { .con = t->input };
+	FILE *i = fmemopen(convert.non_con, t->input_len, "r");
 
 	int ret = test(i,o);
 
 	fflush(o);
-	fclose(o);
+	long output_len = ftell(o);
+	if (output_len < 0) {
+		printf("Couldn't get length of output of test %d: %s\n",
+		       id, strerror(errno));
+		return 1;
+	}
+	char *output = malloc(output_len);
+	if (!output) {
+		printf("Couldn't get output buffer for test %d.\n", id);
+		return 1;
+	}
 
-	if (output_len != t->output_len
+	if (fseek(o, 0, SEEK_SET)) {
+		printf("Couldn't rewind output file for test %d: %s\n",
+		       id, strerror(errno));
+		return 1;
+	}
+
+	if (fread(output, output_len, 1, o) != 1) {
+		printf("Couldn't read in output for test %d: %s\n",
+		       id, strerror(errno));
+	}
+
+	fclose(o);
+	unlink(temp_file_name);
+
+	if ((unsigned)output_len != t->output_len
 	    || memcmp(output, t->output, output_len)) {
 		printf("Test %d failed, output differs.\n", id);
 		if (verbose) {
@@ -1284,7 +1324,7 @@ static int run_testcase(int id, bool verbose)
 			printf("Expected retval == %d, received retval == %d\n",
 			       t->ret, ret);
 		}
-		return 0;
+		return 1;
 	} else if (verbose) {
 		printf("Return code matches.\n");
 	}
@@ -1305,7 +1345,7 @@ static int run_all(void)
 	return failed;
 }
 
-static const char *hex(char *input, size_t len)
+static const char *hex(const char *input, size_t len)
 {
 	static char *buf;
 	static size_t buf_size;
