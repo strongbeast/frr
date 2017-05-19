@@ -31,6 +31,7 @@
 
 /* gcc 4.7 and newer */
 #elif defined(HAVE___ATOMIC)
+#define _ATOMIC_NEED_ALIASES
 
 #define _Atomic volatile
 
@@ -46,9 +47,13 @@
 #define atomic_exchange_explicit __atomic_exchange_n
 #define atomic_fetch_add_explicit __atomic_fetch_add
 #define atomic_fetch_sub_explicit __atomic_fetch_sub
+#define atomic_fetch_or_explicit __atomic_fetch_or
+#define atomic_fetch_and_explicit __atomic_fetch_and
 
 #define atomic_compare_exchange_weak_explicit(atom, expect, desire, mem1, mem2) \
 	__atomic_compare_exchange_n(atom, expect, desire, 1, mem1, mem2)
+#define atomic_compare_exchange_strong_explicit(atom, expect, desire, mem1, mem2) \
+	__atomic_compare_exchange_n(atom, expect, desire, 0, mem1, mem2)
 
 /* gcc 4.1 and newer,
  * clang 3.3 (possibly older)
@@ -58,6 +63,7 @@
  * note __sync_synchronize() 
  */
 #elif defined(HAVE___SYNC)
+#define _ATOMIC_NEED_ALIASES
 
 #define _Atomic volatile
 
@@ -102,6 +108,14 @@
 	({ __sync_synchronize(); \
 	   typeof(*ptr) rval = __sync_fetch_and_sub((ptr), (val)); \
 	   __sync_synchronize(); rval; })
+#define atomic_fetch_or_explicit(ptr, val, mem) \
+	({ __sync_synchronize(); \
+	   typeof(*ptr) rval = __sync_fetch_and_or((ptr), (val)); \
+	   __sync_synchronize(); rval; })
+#define atomic_fetch_and_explicit(ptr, val, mem) \
+	({ __sync_synchronize(); \
+	   typeof(*ptr) rval = __sync_fetch_and_and((ptr), (val)); \
+	   __sync_synchronize(); rval; })
 
 #define atomic_compare_exchange_weak_explicit(atom, expect, desire, mem1, mem2) \
 	({ typeof(atom) _atom = (atom); typeof(expect) _expect = (expect); \
@@ -110,9 +124,19 @@
 	   typeof(*atom) rval = __sync_val_compare_and_swap(_atom, *_expect, _desire); \
 	   __sync_synchronize(); \
 	   bool ret = (rval == *_expect); *_expect = rval; ret; })
+#define atomic_compare_exchange_strong_explicit atomic_compare_exchange_weak_explicit
 
 #else /* !HAVE___ATOMIC && !HAVE_STDATOMIC_H */
 #error no atomic functions...
+#endif
+
+#ifdef _ATOMIC_NEED_ALIASES
+#undef _ATOMIC_NEED_ALIASES
+
+#define atomic_load(x)		atomic_load_explicit(x, memory_order_seq_cst)
+#define atomic_exchange(x,y)	atomic_exchange_explicit(x, y, memory_order_seq_cst)
+#define atomic_store(x,y)	atomic_store_explicit(x, y, memory_order_seq_cst)
+
 #endif
 
 #endif /* _FRRATOMIC_H */
