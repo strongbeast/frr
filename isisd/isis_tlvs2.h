@@ -6,6 +6,21 @@
 
 struct isis_subtlvs;
 
+struct isis_area_address;
+struct isis_area_address {
+	struct isis_area_address *next;
+
+	uint8_t addr[20];
+	uint8_t len;
+};
+
+struct isis_oldstyle_reach {
+	struct isis_oldtyle_reach *next;
+
+	uint8_t id[7];
+	uint8_t metric;
+};
+
 struct isis_extended_reach;
 struct isis_extended_reach {
 	struct isis_extended_reach *next;
@@ -61,6 +76,8 @@ struct isis_item_list *isis_get_mt_items(struct isis_mt_item_list *m, uint16_t m
 struct isis_item_list *isis_lookup_mt_items(struct isis_mt_item_list *m, uint16_t mtid);
 
 struct isis_tlvs {
+	struct isis_item_list area_addresses;
+	struct isis_item_list oldstyle_reach;
 	struct isis_item_list extended_reach;
 	struct isis_mt_item_list mt_reach;
 	struct isis_protocols_supported protocols_supported;
@@ -85,6 +102,8 @@ enum isis_tlv_context {
 };
 
 enum isis_tlv_type {
+	ISIS_TLV_AREA_ADDRESSES = 1,
+	ISIS_TLV_OLDSTYLE_REACH = 2,
 	ISIS_TLV_PADDING = 8,
 	ISIS_TLV_EXTENDED_REACH = 22,
 

@@ -156,7 +156,8 @@ static struct isis_subtlvs *copy_subtlvs(struct isis_subtlvs *subtlvs)
 	return rv;
 }
 
-static void format_subtlvs(struct isis_subtlvs *subtlvs, struct sbuf *buf, int indent)
+static void format_subtlvs(struct isis_subtlvs *subtlvs,
+                           struct sbuf *buf, int indent)
 {
 	format_subtlv_ipv6_source_prefix(subtlvs->source_prefix, buf, indent);
 }
@@ -196,6 +197,162 @@ static int pack_subtlvs(struct isis_subtlvs *subtlvs, struct stream *s)
 static int unpack_tlvs(enum isis_tlv_context context,
                        size_t avail_len, struct stream *stream,
                        struct sbuf *log, void *dest, int indent);
+
+/* Functions related to TLVs 1 Area Addresses */
+
+static struct isis_item *copy_item_area_address(struct isis_item *i)
+{
+	struct isis_area_address *addr = (struct isis_area_address*)i;
+	struct isis_area_address *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+
+	rv->len = addr->len;
+	memcpy(rv->addr, addr->addr, addr->len);
+	return (struct isis_item*)rv;
+}
+
+static void format_item_area_address(uint16_t mtid, struct isis_item *i,
+                                     struct sbuf *buf, int indent)
+{
+	struct isis_area_address *addr = (struct isis_area_address*)i;
+
+	sbuf_push(buf, indent, "Area Address: %s\n",
+	          isonet_print(addr->addr, addr->len));
+}
+
+static void free_item_area_address(struct isis_item *i)
+{
+	XFREE(MTYPE_ISIS_TLV2, i);
+}
+
+static int pack_item_area_address(struct isis_item *i,
+                                  struct stream *s)
+{
+	struct isis_area_address *addr = (struct isis_area_address*)i;
+
+	if (STREAM_WRITEABLE(s) < (unsigned)1 + addr->len)
+		return 1;
+	stream_putc(s, addr->len);
+	stream_put(s, addr->addr, addr->len);
+	return 0;
+}
+
+static int unpack_item_area_address(uint16_t mtid,
+                                    uint8_t len,
+                                    struct stream *s,
+                                    struct sbuf *log,
+                                    void *dest,
+                                    int indent)
+{
+	struct isis_tlvs *tlvs = dest;
+	struct isis_area_address *rv = NULL;
+
+	sbuf_push(log, indent, "Unpack area address...\n");
+	if (len < 1) {
+		sbuf_push(log, indent, "Not enough data left. (Expected 1 byte of address length, got %"
+		          PRIu8 ")\n", len);
+		goto out;
+	}
+
+	rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+	rv->len = stream_getc(s);
+
+	if (len < 1 + rv->len) {
+		sbuf_push(log, indent, "Not enough data left. (Expected %" PRIu8 " bytes of address, got %"
+		          PRIu8 ")\n", rv->len, len - 1);
+		goto out;
+	}
+
+	if (rv->len < 1 || rv->len > 20) {
+		sbuf_push(log, indent, "Implausible area address length %"PRIu8 "\n",
+		          rv->len);
+		goto out;
+	}
+
+	stream_get(rv->addr, s, rv->len);
+
+	format_item_area_address(ISIS_MT_IPV4_UNICAST, (struct isis_item*)rv,
+	                         log, indent + 2);
+	append_item(&tlvs->area_addresses, (struct isis_item*)rv);
+	return 0;
+out:
+	XFREE(MTYPE_ISIS_TLV2, rv);
+	return 1;
+}
+
+/* Functions related to TLV 2 (Old-Style) IS Reach */
+static struct isis_item *copy_item_oldstyle_reach(struct isis_item *i)
+{
+	struct isis_oldstyle_reach *r = (struct isis_oldstyle_reach*)i;
+	struct isis_oldstyle_reach *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+
+	memcpy(rv->id, r->id, 7);
+	rv->metric = r->metric;
+	return (struct isis_item*)rv;
+}
+
+static void format_item_oldstyle_reach(uint16_t mtid, struct isis_item *i,
+                                       struct sbuf *buf, int indent)
+{
+	struct isis_oldstyle_reach *r = (struct isis_oldstyle_reach*)i;
+
+	sbuf_push(buf, indent, "IS Reachability:\n");
+	sbuf_push(buf, indent, "  ID: %s\n", isis_format_id(r->id, 7));
+	sbuf_push(buf, indent, "  Metric: %" PRIu8 "\n", r->metric);
+}
+
+static void free_item_oldstyle_reach(struct isis_item *i)
+{
+	XFREE(MTYPE_ISIS_TLV2, i);
+}
+
+static int pack_item_oldstyle_reach(struct isis_item *i,
+                                    struct stream *s)
+{
+	struct isis_oldstyle_reach *r = (struct isis_oldstyle_reach*)i;
+
+	if (STREAM_WRITEABLE(s) < 12)
+		return 1;
+
+	stream_putc(s, 0); /* virtual flag, unsupported */
+	stream_putc(s, r->metric);
+	stream_putc(s, 0x80); /* delay metric - unsupported */
+	stream_putc(s, 0x80); /* expense metric - unsupported */
+	stream_putc(s, 0x80); /* error metric - unsupported */
+	stream_put(s, r->id, sizeof(r->id));
+
+	return 0;
+}
+
+static int unpack_item_oldstyle_reach(uint16_t mtid,
+                                      uint8_t len,
+                                      struct stream *s,
+                                      struct sbuf *log,
+                                      void *dest,
+                                      int indent)
+{
+	struct isis_tlvs *tlvs = dest;
+
+	sbuf_push(log, indent, "Unpack oldstyle reach...\n");
+	if (len < 12) {
+		sbuf_push(log, indent, "Not enough data left.(Expected 12 bytes of reach information, got %"
+		          PRIu8 ")\n", len);
+		return 1;
+	}
+
+	struct isis_oldstyle_reach *rv = XMALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+	stream_forward_getp(s, 1); /* Skip virtual-flag */
+	rv->metric = stream_getc(s);
+	if ((rv->metric & 0x3f) != rv->metric) {
+		sbuf_push(log, indent, "Metric has unplausible format\n");
+		rv->metric &= 0x3f;
+	}
+	stream_forward_getp(s, 3); /* Skip other metrics */
+	stream_get(rv->id, s, 7);
+
+	format_item_oldstyle_reach(mtid, (struct isis_item*)rv, log, indent + 2);
+	append_item(&tlvs->oldstyle_reach, (struct isis_item*)rv);
+	return 0;
+}
 
 /* Functions related to TLVs 22/222 Extended Reach/MT Reach */
 
@@ -1121,6 +1278,8 @@ struct isis_tlvs *isis_alloc_tlvs(void)
 
 	result = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*result));
 
+	init_item_list(&result->area_addresses);
+	init_item_list(&result->oldstyle_reach);
 	init_item_list(&result->extended_reach);
 	RB_INIT(&result->mt_reach);
 	init_item_list(&result->extended_ip_reach);
@@ -1134,6 +1293,12 @@ struct isis_tlvs *isis_alloc_tlvs(void)
 struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
 {
 	struct isis_tlvs *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+
+	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_AREA_ADDRESSES,
+	           &tlvs->area_addresses, &rv->area_addresses);
+
+	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_OLDSTYLE_REACH,
+	           &tlvs->oldstyle_reach, &rv->oldstyle_reach);
 
 	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
 	           &tlvs->extended_reach, &rv->extended_reach);
@@ -1164,6 +1329,12 @@ struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
 static void format_tlvs(struct isis_tlvs *tlvs, struct sbuf *buf, int indent)
 {
 	format_tlv_protocols_supported(&tlvs->protocols_supported, buf, indent);
+
+	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_AREA_ADDRESSES,
+	             &tlvs->area_addresses, buf, indent);
+
+	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_OLDSTYLE_REACH,
+	             &tlvs->oldstyle_reach, buf, indent);
 
 	format_tlv_dynamic_hostname(tlvs->hostname, buf, indent);
 
@@ -1203,6 +1374,10 @@ void isis_free_tlvs(struct isis_tlvs *tlvs)
 	if (!tlvs)
 		return;
 
+	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_AREA_ADDRESSES,
+	           &tlvs->area_addresses);
+	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_OLDSTYLE_REACH,
+	           &tlvs->oldstyle_reach);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
 		   &tlvs->extended_reach);
 	free_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_REACH,
@@ -1229,7 +1404,17 @@ int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream)
 	if (rv)
 		return rv;
 
+	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_AREA_ADDRESSES,
+	                &tlvs->area_addresses, stream);
+	if (rv)
+		return rv;
+
 	rv = pack_tlv_dynamic_hostname(tlvs->hostname, stream);
+	if (rv)
+		return rv;
+
+	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_OLDSTYLE_REACH,
+	                &tlvs->oldstyle_reach, stream);
 	if (rv)
 		return rv;
 
@@ -1398,6 +1583,8 @@ int isis_unpack_tlvs(size_t avail_len,
 		.unpack = unpack_subtlv_##_name_, \
 	}
 
+ITEM_TLV_OPS(area_address, "TLV 1 Area Addresses");
+ITEM_TLV_OPS(oldstyle_reach, "TLV 2 IS Reachability");
 ITEM_TLV_OPS(extended_reach, "TLV 22 Extended Reachability");
 TLV_OPS(protocols_supported, "TLV 129 Protocols Supported");
 ITEM_TLV_OPS(extended_ip_reach, "TLV 135 Extended IP Reachability");
@@ -1408,6 +1595,8 @@ SUBTLV_OPS(ipv6_source_prefix, "Sub-TLV 22 IPv6 Source Prefix");
 
 static const struct tlv_ops *tlv_table[ISIS_CONTEXT_MAX][ISIS_TLV_MAX] = {
 	[ISIS_CONTEXT_LSP] = {
+		[ISIS_TLV_AREA_ADDRESSES] = &tlv_area_address_ops,
+		[ISIS_TLV_OLDSTYLE_REACH] = &tlv_oldstyle_reach_ops,
 		[ISIS_TLV_EXTENDED_REACH] = &tlv_extended_reach_ops,
 		[ISIS_TLV_MT_REACH] = &tlv_extended_reach_ops,
 		[ISIS_TLV_PROTOCOLS_SUPPORTED] = &tlv_protocols_supported_ops,
