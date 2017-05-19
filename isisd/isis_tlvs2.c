@@ -310,10 +310,9 @@ static int pack_item_oldstyle_reach(struct isis_item *i,
 {
 	struct isis_oldstyle_reach *r = (struct isis_oldstyle_reach*)i;
 
-	if (STREAM_WRITEABLE(s) < 12)
+	if (STREAM_WRITEABLE(s) < 11)
 		return 1;
 
-	stream_putc(s, 0); /* virtual flag, unsupported */
 	stream_putc(s, r->metric);
 	stream_putc(s, 0x80); /* delay metric - unsupported */
 	stream_putc(s, 0x80); /* expense metric - unsupported */
@@ -333,14 +332,13 @@ static int unpack_item_oldstyle_reach(uint16_t mtid,
 	struct isis_tlvs *tlvs = dest;
 
 	sbuf_push(log, indent, "Unpack oldstyle reach...\n");
-	if (len < 12) {
-		sbuf_push(log, indent, "Not enough data left.(Expected 12 bytes of reach information, got %"
+	if (len < 11) {
+		sbuf_push(log, indent, "Not enough data left.(Expected 11 bytes of reach information, got %"
 		          PRIu8 ")\n", len);
 		return 1;
 	}
 
 	struct isis_oldstyle_reach *rv = XMALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
-	stream_forward_getp(s, 1); /* Skip virtual-flag */
 	rv->metric = stream_getc(s);
 	if ((rv->metric & 0x3f) != rv->metric) {
 		sbuf_push(log, indent, "Metric has unplausible format\n");
@@ -1092,6 +1090,12 @@ top:
 		stream_putw(s, mtid);
 	}
 
+	if (type == ISIS_TLV_OLDSTYLE_REACH) {
+		if (STREAM_WRITEABLE(s) < 1)
+			return 1;
+		stream_putc(s, 0); /* Virtual flag is set to 0 */
+	}
+
 	last_len = len = 0;
 	for (item = item ? item : items->head; item; item = item->next) {
 		rv = pack_item(context, type, item, s);
@@ -1168,6 +1172,15 @@ static int unpack_tlv_with_items(enum isis_tlv_context context,
 	} else {
 		sbuf_push(log, indent, "Unpacking as item TLV...\n");
 		mtid = ISIS_MT_IPV4_UNICAST;
+	}
+
+	if (tlv_type == ISIS_TLV_OLDSTYLE_REACH) {
+		if (tlv_len - tlv_pos < 1) {
+			sbuf_push(log, indent, "TLV is too short for old style reach\n");
+			return 1;
+		}
+		stream_forward_getp(s, 1);
+		tlv_pos += 1;
 	}
 
 	while (tlv_pos < (size_t)tlv_len) {
