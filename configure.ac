@@ -1588,6 +1588,11 @@ AC_LINK_IFELSE([AC_LANG_PROGRAM([[
   AC_MSG_RESULT(no)
 ])
 
+sd_log=false
+AC_CHECK_LIB(systemd, sd_journal_sendv, [
+  sd_log=true
+])
+AM_CONDITIONAL(SD_LOG, $sd_log)
 
 AM_CONDITIONAL(SNMP, test "x$SNMP_METHOD" = "xagentx")
 

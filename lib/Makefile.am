@@ -4,6 +4,7 @@ AM_CPPFLAGS = -I.. -I$(top_srcdir) -I$(top_srcdir)/lib -I$(top_builddir)/lib
 AM_CFLAGS = $(WERROR)
 DEFS = @DEFS@ -DSYSCONFDIR=\"$(sysconfdir)/\"
 AM_YFLAGS = -d -Dapi.prefix=@BISON_OPENBRACE@cmd_yy@BISON_CLOSEBRACE@ @BISON_VERBOSE@
+module_LTLIBRARIES =
 
 command_lex.h: command_lex.c
 	@if test ! -f $@; then rm -f command_lex.c; else :; fi
@@ -59,6 +60,15 @@ libfrrsnmp_la_SOURCES = \
 	smux.c \
 	snmp.c \
 	#end
+
+if SD_LOG
+module_LTLIBRARIES += sd_journal.la
+endif
+sd_journal_la_SOURCES = zlog_sd.c
+sd_journal_la_CFLAGS = $(WERROR)
+sd_journal_la_LDFLAGS = -avoid-version -module -shared -export-dynamic
+sd_journal_la_LIBADD = libfrr.la -lsystemd
+
 
 pkginclude_HEADERS = \
 	frratomic.h \
