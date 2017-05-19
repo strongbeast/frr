@@ -39,115 +39,38 @@ struct tlv_ops {
 	copy_item_func copy_item;
 };
 
-static int isis_mt_item_list_cmp(struct isis_item_list *a, struct isis_item_list *b)
-{
-	if (a->mtid < b->mtid)
-		return -1;
-	if (a->mtid > b->mtid)
-		return 1;
-	return 0;
-}
-
-RB_GENERATE_STATIC(isis_mt_item_list, isis_item_list, mt_tree, isis_mt_item_list_cmp);
-
-static void init_item_list(struct isis_item_list *items)
-{
-	items->head = NULL;
-	items->tail = &items->head;
-}
-
-struct isis_item_list *isis_get_mt_items(struct isis_mt_item_list *m, uint16_t mtid)
-{
-	struct isis_item_list *rv;
-
-	rv = isis_lookup_mt_items(m, mtid);
-	if (!rv) {
-		rv = XMALLOC(MTYPE_ISIS_MT_ITEM_LIST, sizeof(*rv));
-		init_item_list(rv);
-		rv->mtid = mtid;
-		RB_INSERT(isis_mt_item_list, m, rv);
-	}
-
-	return rv;
-}
-
-struct isis_item_list *isis_lookup_mt_items(struct isis_mt_item_list *m, uint16_t mtid)
-{
-	struct isis_item_list key = {
-		.mtid = mtid
-	};
-
-	return RB_FIND(isis_mt_item_list, m, &key);
-}
-
-static void free_items(enum isis_tlv_context context, enum isis_tlv_type type,
-		       struct isis_item_list *items);
-
-static void free_mt_items(enum isis_tlv_context context, enum isis_tlv_type type,
-                          struct isis_mt_item_list *m)
-{
-	struct isis_item_list *n, *nnext;
-
-	RB_FOREACH_SAFE(n, isis_mt_item_list, m, nnext) {
-		free_items(context, type, n);
-		RB_REMOVE(isis_mt_item_list, m, n);
-		XFREE(MTYPE_ISIS_MT_ITEM_LIST, n);
-	}
-}
-
-static void format_items_(uint16_t mtid, enum isis_tlv_context context,
-                          enum isis_tlv_type type, struct isis_item_list *items,
-                          struct sbuf *buf, int indent);
-
-static void format_mt_items(enum isis_tlv_context context, enum isis_tlv_type type,
-                            struct isis_mt_item_list *m, struct sbuf *buf, int indent)
-{
-	struct isis_item_list *n;
-
-	RB_FOREACH(n, isis_mt_item_list, m) {
-		format_items_(n->mtid, context, type, n, buf, indent);
-	}
-}
-
-static int pack_items_(uint16_t mtid, enum isis_tlv_context context, enum isis_tlv_type type,
-                       struct isis_item_list *items, struct stream *s);
-
-static int pack_mt_items(enum isis_tlv_context context, enum isis_tlv_type type,
-                         struct isis_mt_item_list *m, struct stream *s)
-{
-	struct isis_item_list *n;
-
-	RB_FOREACH(n, isis_mt_item_list, m) {
-		int rv;
-
-		rv = pack_items_(n->mtid, context, type, n, s);
-		if (rv)
-			return rv;
-	}
-
-	return 0;
-}
-
-static void copy_items(enum isis_tlv_context context, enum isis_tlv_type type,
-                       struct isis_item_list *src, struct isis_item_list *dest);
-
-static void copy_mt_items(enum isis_tlv_context context, enum isis_tlv_type type,
-                          struct isis_mt_item_list *src, struct isis_mt_item_list *dest)
-{
-	struct isis_item_list *n;
-
-	RB_INIT(dest);
-
-	RB_FOREACH(n, isis_mt_item_list, src) {
-		copy_items(context, type, n, isis_get_mt_items(dest, n->mtid));
-	}
-}
-
-/* This is a forward definition. The table is actually filled
+/* This is a forward definition. The table is actually initialized
  * in at the bottom. */
 static const struct tlv_ops *tlv_table[ISIS_CONTEXT_MAX][ISIS_TLV_MAX];
 
 /* End of _ops forward definition. */
+
+/* Prototypes */
+static void append_item(struct isis_item_list *dest, struct isis_item *item);
+
+/* Functions for Sub-TVL ??? IPv6 Source Prefix */
+
+static struct prefix_ipv6 *copy_subtlv_ipv6_source_prefix(struct prefix_ipv6 *p)
+{
+	if (!p)
+		return NULL;
+
+	struct prefix_ipv6 *rv = XCALLOC(MTYPE_ISIS_SUBTLV, sizeof(*rv));
+	rv->family = p->family;
+	rv->prefixlen = p->prefixlen;
+	memcpy(&rv->prefix, &p->prefix, sizeof(rv->prefix));
+	return rv;
+}
+
+static void format_subtlv_ipv6_source_prefix(struct prefix_ipv6 *p, struct sbuf *buf, int indent)
+{
+	if (!p)
+		return;
+
+	char prefixbuf[PREFIX2STR_BUFFER];
+	sbuf_push(buf, indent, "IPv6 Source Prefix: %s\n",
+	          prefix2str(p, prefixbuf, sizeof(prefixbuf)));
+}
 
 static int pack_subtlv_ipv6_source_prefix(struct prefix_ipv6 *p, struct stream *s)
 {
@@ -162,6 +85,90 @@ static int pack_subtlv_ipv6_source_prefix(struct prefix_ipv6 *p, struct stream *
 	stream_putc(s, p->prefixlen);
 	stream_put(s, &p->prefix, PSIZE(p->prefixlen));
 	return 0;
+}
+
+static int unpack_subtlv_ipv6_source_prefix(enum isis_tlv_context context,
+                                            uint8_t tlv_type,
+                                            uint8_t tlv_len,
+                                            struct stream *s,
+                                            struct sbuf *log,
+                                            void *dest,
+                                            int indent)
+{
+	struct isis_subtlvs *subtlvs = dest;
+	struct prefix_ipv6 p = {
+		.family = AF_INET6,
+	};
+
+	sbuf_push(log, indent, "Unpacking IPv6 Source Prefix Sub-TLV...\n");
+
+	if (tlv_len < 1) {
+		sbuf_push(log, indent, "Not enough data left. "
+		          "(expected 1 or more bytes, got %" PRIu8 ")\n", tlv_len);
+		return 1;
+	}
+
+	p.prefixlen = stream_getc(s);
+	if (p.prefixlen > 128) {
+		sbuf_push(log, indent, "Prefixlen %u is inplausible for IPv6\n",
+		          p.prefixlen);
+		return 1;
+	}
+
+	if (tlv_len != 1 + PSIZE(p.prefixlen)) {
+		sbuf_push(log, indent, "TLV size differs from expected size for the prefixlen. "
+		          "(expected %u but got %" PRIu8 ")\n", 1 + PSIZE(p.prefixlen), tlv_len);
+		return 1;
+	}
+
+	stream_get(&p.prefix, s, PSIZE(p.prefixlen));
+
+	if (subtlvs->source_prefix) {
+		sbuf_push(log, indent, "WARNING: source prefix Sub-TLV present multiple times.\n");
+		/* Ignore all but first occurrence of the source prefix Sub-TLV */
+		return 0;
+	}
+
+	subtlvs->source_prefix = XCALLOC(MTYPE_ISIS_SUBTLV, sizeof(p));
+	memcpy(subtlvs->source_prefix, &p, sizeof(p));
+	return 0;
+}
+
+/* Functions related to subtlvs */
+
+static struct isis_subtlvs *isis_alloc_subtlvs(void)
+{
+	struct isis_subtlvs *result;
+
+	result = XCALLOC(MTYPE_ISIS_SUBTLV, sizeof(*result));
+
+	return result;
+}
+
+static struct isis_subtlvs *copy_subtlvs(struct isis_subtlvs *subtlvs)
+{
+	if (!subtlvs)
+		return NULL;
+
+	struct isis_subtlvs *rv = XCALLOC(MTYPE_ISIS_SUBTLV, sizeof(*rv));
+
+	rv->source_prefix = copy_subtlv_ipv6_source_prefix(subtlvs->source_prefix);
+	return rv;
+}
+
+static void format_subtlvs(struct isis_subtlvs *subtlvs, struct sbuf *buf, int indent)
+{
+	format_subtlv_ipv6_source_prefix(subtlvs->source_prefix, buf, indent);
+}
+
+static void isis_free_subtlvs(struct isis_subtlvs *subtlvs)
+{
+	if (!subtlvs)
+		return;
+
+	XFREE(MTYPE_ISIS_SUBTLV, subtlvs->source_prefix);
+
+	XFREE(MTYPE_ISIS_SUBTLV, subtlvs);
 }
 
 static int pack_subtlvs(struct isis_subtlvs *subtlvs, struct stream *s)
@@ -184,6 +191,51 @@ static int pack_subtlvs(struct isis_subtlvs *subtlvs, struct stream *s)
 
 	stream_putc_at(s, subtlv_len_pos, subtlv_len);
 	return 0;
+}
+
+static int unpack_tlvs(enum isis_tlv_context context,
+                       size_t avail_len, struct stream *stream,
+                       struct sbuf *log, void *dest, int indent);
+
+/* Functions related to TLVs 22/222 Extended Reach/MT Reach */
+
+static struct isis_item *copy_item_extended_reach(struct isis_item *i)
+{
+	struct isis_extended_reach *r = (struct isis_extended_reach*)i;
+	struct isis_extended_reach *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+
+	memcpy(rv->id, r->id, 7);
+	rv->metric = r->metric;
+#if 0
+	rv->subtlvs = isis_copy_tlvs(r->subtlvs);
+#endif
+
+	return (struct isis_item*)rv;
+}
+
+static void format_item_extended_reach(uint16_t mtid, struct isis_item *i,
+                                       struct sbuf *buf, int indent)
+{
+	struct isis_extended_reach *r = (struct isis_extended_reach*)i;
+
+	sbuf_push(buf, indent, "%s Reachability:\n",
+	          (mtid == ISIS_MT_IPV4_UNICAST) ? "Extended" : "MT");
+	sbuf_push(buf, indent, "  ID: %s\n", isis_format_id(r->id, 7));
+	sbuf_push(buf, indent, "  Metric: %u\n", r->metric);
+	if (mtid != ISIS_MT_IPV4_UNICAST)
+		sbuf_push(buf, indent, "  Topology: %s\n", isis_mtid2str(mtid));
+#if 0
+	if (r->subtlvs) {
+		sbuf_push(buf, indent, "  Subtlvs:\n");
+		format_tlvs(r->subtlvs, buf, indent + 4);
+	}
+#endif
+}
+
+static void free_item_extended_reach(struct isis_item *i)
+{
+	struct isis_extended_reach *item = (struct isis_extended_reach*)i;
+	XFREE(MTYPE_ISIS_TLV2, item);
 }
 
 static int pack_item_extended_reach(struct isis_item *i,
@@ -210,288 +262,6 @@ static int pack_item_extended_reach(struct isis_item *i,
 #endif
 	return 0;
 }
-
-static int pack_tlv_protocols_supported(struct isis_protocols_supported *p,
-                                        struct stream *s)
-{
-	if (!p || !p->count || !p->protocols)
-		return 0;
-
-	if (STREAM_WRITEABLE(s) < (unsigned)(p->count + 2))
-		return 1;
-
-	stream_putc(s, ISIS_TLV_PROTOCOLS_SUPPORTED);
-	stream_putc(s, p->count);
-	stream_put(s, p->protocols, p->count);
-	return 0;
-}
-
-static int pack_item_extended_ip_reach(struct isis_item *i,
-				       struct stream *s)
-{
-	struct isis_extended_ip_reach *r = (struct isis_extended_ip_reach*)i;
-	uint8_t control;
-
-	if (STREAM_WRITEABLE(s) < 5)
-		return 1;
-	stream_putl(s, r->metric);
-
-	control = r->down ? ISIS_EXTENDED_IP_REACH_DOWN : 0;
-#if 0
-	control |= TODO_HAS_SUB ? ISIS_EXTENDED_IP_REACH_SUBTLV : 0;
-#endif
-	control |= r->prefix.prefixlen;
-	stream_putc(s, control);
-
-	if (STREAM_WRITEABLE(s) < (unsigned)PSIZE(r->prefix.prefixlen))
-		return 1;
-	stream_put(s, &r->prefix.prefix.s_addr, PSIZE(r->prefix.prefixlen));
-
-#if 0
-	if (r->subtlvs) {
-		subtlv_len_pos = stream_get_endp(s);
-		stream_putc(s, 0); /* Put 0 as subtlv length, filled in later */
-		rv = isis_pack_tlvs(r->subtlvs, s);
-		if (rv)
-			return rv;
-
-		/* Fill in subtlv len */
-		subtlv_len = stream_get_endp(s) - subtlv_len_pos - 1;
-		if (subtlv_len > 255)
-			return 1;
-
-		stream_putc_at(s, subtlv_len_pos, subtlv_len);
-	}
-#endif
-
-	return 0;
-}
-
-static int pack_item_ipv6_reach(struct isis_item *i,
-				struct stream *s)
-{
-	struct isis_ipv6_reach *r = (struct isis_ipv6_reach*)i;
-	uint8_t control;
-
-	if (STREAM_WRITEABLE(s) < 6)
-		return 1;
-	stream_putl(s, r->metric);
-
-	control = r->down ? ISIS_IPV6_REACH_DOWN : 0;
-	control |= r->external ? ISIS_IPV6_REACH_EXTERNAL : 0;
-	control |= r->subtlvs ? ISIS_IPV6_REACH_SUBTLV : 0;
-
-	stream_putc(s, control);
-	stream_putc(s, r->prefix.prefixlen);
-
-	if (STREAM_WRITEABLE(s) < (unsigned)PSIZE(r->prefix.prefixlen))
-		return 1;
-	stream_put(s, &r->prefix.prefix.s6_addr, PSIZE(r->prefix.prefixlen));
-
-	if (r->subtlvs)
-		return pack_subtlvs(r->subtlvs, s);
-
-	return 0;
-}
-
-static int pack_item(enum isis_tlv_context context, enum isis_tlv_type type,
-		     struct isis_item *i, struct stream *s)
-{
-	const struct tlv_ops *ops = tlv_table[context][type];
-
-	if (ops && ops->pack_item)
-		return ops->pack_item(i, s);
-
-	assert(!"Unknown item tlv type!");
-	return 1;
-}
-
-static int pack_items_(uint16_t mtid, enum isis_tlv_context context, enum isis_tlv_type type,
-                       struct isis_item_list *items, struct stream *s)
-{
-	size_t len_pos, last_len, len;
-	struct isis_item *item = NULL;
-	int rv;
-
-	if (!items->head)
-		return 0;
-
-top:
-	if (STREAM_WRITEABLE(s) < 2)
-		return 1;
-	stream_putc(s, type);
-	len_pos = stream_get_endp(s);
-	stream_putc(s, 0); /* Put 0 as length for now */
-
-	if (IS_COMPAT_MT_TLV(type)
-	    && mtid != ISIS_MT_IPV4_UNICAST) {
-		if (STREAM_WRITEABLE(s) < 2)
-			return 1;
-		stream_putw(s, mtid);
-	}
-
-	last_len = len = 0;
-	for (item = item ? item : items->head; item; item = item->next) {
-		rv = pack_item(context, type, item, s);
-		if (rv)
-			return rv;
-
-		len = stream_get_endp(s) - len_pos - 1;
-		if (len > 255) {
-			if (!last_len) /* strange, not a single item fit */
-				return 1;
-			/* drop last tlv, otherwise, its too long */
-			stream_set_endp(s, len_pos + 1 + last_len);
-			len = last_len;
-			break;
-		}
-		last_len = len;
-	}
-
-	stream_putc_at(s, len_pos, len);
-	if (item)
-		goto top;
-
-	return 0;
-}
-#define pack_items(...) pack_items_(ISIS_MT_IPV4_UNICAST, __VA_ARGS__)
-
-int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream)
-{
-	int rv;
-
-	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
-	                &tlvs->extended_reach, stream);
-	if (rv)
-		return rv;
-
-	rv = pack_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_REACH,
-	                   &tlvs->mt_reach, stream);
-	if (rv)
-		return rv;
-
-	rv = pack_tlv_protocols_supported(&tlvs->protocols_supported, stream);
-	if (rv)
-		return rv;
-
-	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
-	                &tlvs->extended_ip_reach, stream);
-	if (rv)
-		return rv;
-
-	rv = pack_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IP_REACH,
-	                   &tlvs->mt_ip_reach, stream);
-	if (rv)
-		return rv;
-
-	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
-	                &tlvs->ipv6_reach, stream);
-	if (rv)
-		return rv;
-
-	rv = pack_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IPV6_REACH,
-	                   &tlvs->mt_ipv6_reach, stream);
-	if (rv)
-		return rv;
-
-	return 0;
-}
-
-static void isis_free_subtlvs(struct isis_subtlvs *subtlvs)
-{
-	if (!subtlvs)
-		return;
-
-	XFREE(MTYPE_ISIS_SUBTLV, subtlvs->source_prefix);
-
-	XFREE(MTYPE_ISIS_SUBTLV, subtlvs);
-}
-
-static void free_item_extended_reach(struct isis_item *i)
-{
-	struct isis_extended_reach *item = (struct isis_extended_reach*)i;
-	XFREE(MTYPE_ISIS_TLV2, item);
-}
-
-static void free_tlv_protocols_supported(struct isis_protocols_supported *p)
-{
-	XFREE(MTYPE_ISIS_TLV2, p->protocols);
-}
-
-static void free_item_extended_ip_reach(struct isis_item *i)
-{
-	struct isis_extended_ip_reach *item = (struct isis_extended_ip_reach*)i;
-	XFREE(MTYPE_ISIS_TLV2, item);
-}
-
-static void free_item_ipv6_reach(struct isis_item *i)
-{
-	struct isis_ipv6_reach *item = (struct isis_ipv6_reach*)i;
-
-	isis_free_subtlvs(item->subtlvs);
-	XFREE(MTYPE_ISIS_TLV2, item);
-}
-
-static void free_item(enum isis_tlv_context tlv_context,
-		      enum isis_tlv_type tlv_type,
-		      struct isis_item *item)
-{
-	const struct tlv_ops *ops = tlv_table[tlv_context][tlv_type];
-
-	if (ops && ops->free_item) {
-		ops->free_item(item);
-		return;
-	}
-
-	assert(!"Unknown item tlv type!");
-}
-
-static void free_items(enum isis_tlv_context context, enum isis_tlv_type type,
-		       struct isis_item_list *items)
-{
-	struct isis_item *item, *next_item;
-
-	for (item = items->head; item; item = next_item) {
-		next_item = item->next;
-		free_item(context, type, item);
-	}
-}
-
-void isis_free_tlvs(struct isis_tlvs *tlvs)
-{
-	if (!tlvs)
-		return;
-
-	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
-		   &tlvs->extended_reach);
-	free_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_REACH,
-		   &tlvs->mt_reach);
-	free_tlv_protocols_supported(&tlvs->protocols_supported);
-	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
-		   &tlvs->extended_ip_reach);
-	free_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IP_REACH,
-		   &tlvs->mt_ip_reach);
-	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
-		   &tlvs->ipv6_reach);
-	free_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IPV6_REACH,
-		   &tlvs->mt_ipv6_reach);
-
-	XFREE(MTYPE_ISIS_TLV2, tlvs);
-}
-
-static void append_item(struct isis_item_list *dest, struct isis_item *item)
-{
-	*dest->tail = item;
-	dest->tail = &(*dest->tail)->next;
-}
-
-static struct isis_subtlvs *isis_alloc_subtlvs(void);
-static int unpack_tlvs(enum isis_tlv_context context,
-                       size_t avail_len, struct stream *stream,
-                       struct sbuf *log, void *dest, int indent);
-
-static void format_item_extended_reach(uint16_t mtid, struct isis_item *i,
-                                       struct sbuf *buf, int indent);
 
 static int unpack_item_extended_reach(uint16_t mtid,
                                       uint8_t len,
@@ -548,8 +318,49 @@ out:
 	return 1;
 }
 
+/* Functions related to TLV 129 protocols supported */
+
+static void copy_tlv_protocols_supported(struct isis_protocols_supported *src,
+                                         struct isis_protocols_supported *dest)
+{
+	if (!src->protocols || !src->count)
+		return;
+	dest->count = src->count;
+	dest->protocols = XMALLOC(MTYPE_ISIS_TLV2, src->count);
+	memcpy(dest->protocols, src->protocols, src->count);
+}
+
 static void format_tlv_protocols_supported(struct isis_protocols_supported *p,
-                                           struct sbuf *buf, int indent);
+                                           struct sbuf *buf, int indent)
+{
+	if (!p || !p->count || !p->protocols)
+		return;
+
+	sbuf_push(buf, indent, "Protocols Supported:\n");
+	for (uint8_t i = 0; i < p->count; i++) {
+		sbuf_push(buf, indent + 2, "%s\n", nlpid2str(p->protocols[i]));
+	}
+}
+
+static void free_tlv_protocols_supported(struct isis_protocols_supported *p)
+{
+	XFREE(MTYPE_ISIS_TLV2, p->protocols);
+}
+
+static int pack_tlv_protocols_supported(struct isis_protocols_supported *p,
+                                        struct stream *s)
+{
+	if (!p || !p->count || !p->protocols)
+		return 0;
+
+	if (STREAM_WRITEABLE(s) < (unsigned)(p->count + 2))
+		return 1;
+
+	stream_putc(s, ISIS_TLV_PROTOCOLS_SUPPORTED);
+	stream_putc(s, p->count);
+	stream_put(s, p->protocols, p->count);
+	return 0;
+}
 
 static int unpack_tlv_protocols_supported(enum isis_tlv_context context,
                                           uint8_t tlv_type,
@@ -579,8 +390,93 @@ static int unpack_tlv_protocols_supported(enum isis_tlv_context context,
 	return 0;
 }
 
+
+/* Functions related to TLVs 135/235 extended IP reach/MT IP Reach */
+
+static struct isis_item *copy_item_extended_ip_reach(struct isis_item *i)
+{
+	struct isis_extended_ip_reach *r = (struct isis_extended_ip_reach*)i;
+	struct isis_extended_ip_reach *rv = XCALLOC(MTYPE_ISIS_TLV2,
+						    sizeof(*rv));
+
+	rv->metric = r->metric;
+	rv->down = r->down;
+	rv->prefix = r->prefix;
+#if 0
+	rv->subtlvs = isis_copy_tlvs(r->subtlvs);
+#endif
+
+	return (struct isis_item*)rv;
+}
+
 static void format_item_extended_ip_reach(uint16_t mtid, struct isis_item *i,
-                                          struct sbuf *buf, int indent);
+                                          struct sbuf *buf, int indent)
+{
+	struct isis_extended_ip_reach *r = (struct isis_extended_ip_reach*)i;
+	char prefixbuf[64];
+
+	sbuf_push(buf, indent, "%s IP Reachability:\n",
+	          (mtid == ISIS_MT_IPV4_UNICAST) ? "Extended" : "MT");
+	sbuf_push(buf, indent, "  Metric: %u\n", r->metric);
+	sbuf_push(buf, indent, "  Down: %s\n", r->down ? "Yes" : "No");
+	sbuf_push(buf, indent, "  Prefix: %s\n", prefix2str(&r->prefix, prefixbuf,
+	                                                    sizeof(prefixbuf)));
+	if (mtid != ISIS_MT_IPV4_UNICAST)
+		sbuf_push(buf, indent, "  Topology: %s\n", isis_mtid2str(mtid));
+#if 0
+	if (r->subtlvs) {
+		sbuf_push(buf, indent, "  Subtlvs:\n");
+		format_tlvs(r->subtlvs, buf, indent + 4);
+	}
+#endif
+}
+
+static void free_item_extended_ip_reach(struct isis_item *i)
+{
+	struct isis_extended_ip_reach *item = (struct isis_extended_ip_reach*)i;
+	XFREE(MTYPE_ISIS_TLV2, item);
+}
+
+static int pack_item_extended_ip_reach(struct isis_item *i,
+				       struct stream *s)
+{
+	struct isis_extended_ip_reach *r = (struct isis_extended_ip_reach*)i;
+	uint8_t control;
+
+	if (STREAM_WRITEABLE(s) < 5)
+		return 1;
+	stream_putl(s, r->metric);
+
+	control = r->down ? ISIS_EXTENDED_IP_REACH_DOWN : 0;
+#if 0
+	control |= TODO_HAS_SUB ? ISIS_EXTENDED_IP_REACH_SUBTLV : 0;
+#endif
+	control |= r->prefix.prefixlen;
+	stream_putc(s, control);
+
+	if (STREAM_WRITEABLE(s) < (unsigned)PSIZE(r->prefix.prefixlen))
+		return 1;
+	stream_put(s, &r->prefix.prefix.s_addr, PSIZE(r->prefix.prefixlen));
+
+#if 0
+	if (r->subtlvs) {
+		subtlv_len_pos = stream_get_endp(s);
+		stream_putc(s, 0); /* Put 0 as subtlv length, filled in later */
+		rv = isis_pack_tlvs(r->subtlvs, s);
+		if (rv)
+			return rv;
+
+		/* Fill in subtlv len */
+		subtlv_len = stream_get_endp(s) - subtlv_len_pos - 1;
+		if (subtlv_len > 255)
+			return 1;
+
+		stream_putc_at(s, subtlv_len_pos, subtlv_len);
+	}
+#endif
+
+	return 0;
+}
 
 static int unpack_item_extended_ip_reach(uint16_t mtid,
                                          uint8_t len,
@@ -672,8 +568,78 @@ out:
 	return 1;
 }
 
+/* Functions related to TLVs 236/237 IPv6/MT-IPv6 reach */
+
+static struct isis_item *copy_item_ipv6_reach(struct isis_item *i)
+{
+	struct isis_ipv6_reach *r = (struct isis_ipv6_reach*)i;
+	struct isis_ipv6_reach *rv = XCALLOC(MTYPE_ISIS_TLV2,
+	                                     sizeof(*rv));
+	rv->metric = r->metric;
+	rv->down = r->down;
+	rv->external = r->external;
+	rv->prefix = r->prefix;
+	rv->subtlvs = copy_subtlvs(r->subtlvs);
+
+	return (struct isis_item*)rv;
+}
+
 static void format_item_ipv6_reach(uint16_t mtid, struct isis_item *i,
-                                   struct sbuf *buf, int indent);
+                                   struct sbuf *buf, int indent)
+{
+	struct isis_ipv6_reach *r = (struct isis_ipv6_reach*)i;
+	char prefixbuf[PREFIX2STR_BUFFER];
+
+	sbuf_push(buf, indent, "%sIPv6 Reachability:\n",
+	          (mtid == ISIS_MT_IPV4_UNICAST) ? "" : "MT ");
+	sbuf_push(buf, indent, "  Metric: %u\n", r->metric);
+	sbuf_push(buf, indent, "  Down: %s\n", r->down ? "Yes" : "No");
+	sbuf_push(buf, indent, "  External: %s\n", r->external ? "Yes" : "No");
+	sbuf_push(buf, indent, "  Prefix: %s\n", prefix2str(&r->prefix, prefixbuf,
+	                                                    sizeof(prefixbuf)));
+	if (mtid != ISIS_MT_IPV4_UNICAST)
+		sbuf_push(buf, indent, "  Topology: %s\n", isis_mtid2str(mtid));
+
+	if (r->subtlvs) {
+		sbuf_push(buf, indent, "  Subtlvs:\n");
+		format_subtlvs(r->subtlvs, buf, indent + 4);
+	}
+}
+
+static void free_item_ipv6_reach(struct isis_item *i)
+{
+	struct isis_ipv6_reach *item = (struct isis_ipv6_reach*)i;
+
+	isis_free_subtlvs(item->subtlvs);
+	XFREE(MTYPE_ISIS_TLV2, item);
+}
+
+static int pack_item_ipv6_reach(struct isis_item *i,
+				struct stream *s)
+{
+	struct isis_ipv6_reach *r = (struct isis_ipv6_reach*)i;
+	uint8_t control;
+
+	if (STREAM_WRITEABLE(s) < 6)
+		return 1;
+	stream_putl(s, r->metric);
+
+	control = r->down ? ISIS_IPV6_REACH_DOWN : 0;
+	control |= r->external ? ISIS_IPV6_REACH_EXTERNAL : 0;
+	control |= r->subtlvs ? ISIS_IPV6_REACH_SUBTLV : 0;
+
+	stream_putc(s, control);
+	stream_putc(s, r->prefix.prefixlen);
+
+	if (STREAM_WRITEABLE(s) < (unsigned)PSIZE(r->prefix.prefixlen))
+		return 1;
+	stream_put(s, &r->prefix.prefix.s6_addr, PSIZE(r->prefix.prefixlen));
+
+	if (r->subtlvs)
+		return pack_subtlvs(r->subtlvs, s);
+
+	return 0;
+}
 
 static int unpack_item_ipv6_reach(uint16_t mtid, uint8_t len,
                                   struct stream *s,
@@ -768,6 +734,157 @@ out:
 	return 1;
 }
 
+/* Functions relating to item TLVs */
+
+static void init_item_list(struct isis_item_list *items)
+{
+	items->head = NULL;
+	items->tail = &items->head;
+}
+
+static struct isis_item *copy_item(enum isis_tlv_context context,
+				   enum isis_tlv_type type,
+				   struct isis_item *item)
+{
+	const struct tlv_ops *ops = tlv_table[context][type];
+
+	if (ops && ops->copy_item)
+		return ops->copy_item(item);
+
+	assert(!"Unknown item tlv type!");
+	return NULL;
+}
+
+static void copy_items(enum isis_tlv_context context, enum isis_tlv_type type,
+                       struct isis_item_list *src, struct isis_item_list *dest)
+{
+	struct isis_item *item;
+
+	init_item_list(dest);
+
+	for (item = src->head; item; item = item->next) {
+		append_item(dest, copy_item(context, type, item));
+	}
+}
+
+static void format_item(uint16_t mtid, enum isis_tlv_context context,
+                        enum isis_tlv_type type, struct isis_item *i,
+                        struct sbuf *buf, int indent)
+{
+	const struct tlv_ops *ops = tlv_table[context][type];
+
+	if (ops && ops->format_item) {
+		ops->format_item(mtid, i, buf, indent);
+		return;
+	}
+
+	assert(!"Unknown item tlv type!");
+}
+
+static void format_items_(uint16_t mtid, enum isis_tlv_context context,
+                          enum isis_tlv_type type, struct isis_item_list *items,
+                          struct sbuf *buf, int indent)
+{
+	struct isis_item *i;
+
+	for (i = items->head; i; i = i->next)
+		format_item(mtid, context, type, i, buf, indent);
+}
+#define format_items(...) format_items_(ISIS_MT_IPV4_UNICAST, __VA_ARGS__)
+
+static void free_item(enum isis_tlv_context tlv_context,
+		      enum isis_tlv_type tlv_type,
+		      struct isis_item *item)
+{
+	const struct tlv_ops *ops = tlv_table[tlv_context][tlv_type];
+
+	if (ops && ops->free_item) {
+		ops->free_item(item);
+		return;
+	}
+
+	assert(!"Unknown item tlv type!");
+}
+
+static void free_items(enum isis_tlv_context context, enum isis_tlv_type type,
+		       struct isis_item_list *items)
+{
+	struct isis_item *item, *next_item;
+
+	for (item = items->head; item; item = next_item) {
+		next_item = item->next;
+		free_item(context, type, item);
+	}
+}
+
+static int pack_item(enum isis_tlv_context context, enum isis_tlv_type type,
+		     struct isis_item *i, struct stream *s)
+{
+	const struct tlv_ops *ops = tlv_table[context][type];
+
+	if (ops && ops->pack_item)
+		return ops->pack_item(i, s);
+
+	assert(!"Unknown item tlv type!");
+	return 1;
+}
+
+static int pack_items_(uint16_t mtid, enum isis_tlv_context context, enum isis_tlv_type type,
+                       struct isis_item_list *items, struct stream *s)
+{
+	size_t len_pos, last_len, len;
+	struct isis_item *item = NULL;
+	int rv;
+
+	if (!items->head)
+		return 0;
+
+top:
+	if (STREAM_WRITEABLE(s) < 2)
+		return 1;
+	stream_putc(s, type);
+	len_pos = stream_get_endp(s);
+	stream_putc(s, 0); /* Put 0 as length for now */
+
+	if (IS_COMPAT_MT_TLV(type)
+	    && mtid != ISIS_MT_IPV4_UNICAST) {
+		if (STREAM_WRITEABLE(s) < 2)
+			return 1;
+		stream_putw(s, mtid);
+	}
+
+	last_len = len = 0;
+	for (item = item ? item : items->head; item; item = item->next) {
+		rv = pack_item(context, type, item, s);
+		if (rv)
+			return rv;
+
+		len = stream_get_endp(s) - len_pos - 1;
+		if (len > 255) {
+			if (!last_len) /* strange, not a single item fit */
+				return 1;
+			/* drop last tlv, otherwise, its too long */
+			stream_set_endp(s, len_pos + 1 + last_len);
+			len = last_len;
+			break;
+		}
+		last_len = len;
+	}
+
+	stream_putc_at(s, len_pos, len);
+	if (item)
+		goto top;
+
+	return 0;
+}
+#define pack_items(...) pack_items_(ISIS_MT_IPV4_UNICAST, __VA_ARGS__)
+
+static void append_item(struct isis_item_list *dest, struct isis_item *item)
+{
+	*dest->tail = item;
+	dest->tail = &(*dest->tail)->next;
+}
+
 static int unpack_item(uint16_t mtid,
                        enum isis_tlv_context context,
                        uint8_t tlv_type, uint8_t len,
@@ -827,50 +944,234 @@ static int unpack_tlv_with_items(enum isis_tlv_context context,
 	return 0;
 }
 
-static int unpack_subtlv_ipv6_source_prefix(enum isis_tlv_context context,
-                                            uint8_t tlv_type,
-                                            uint8_t tlv_len,
-                                            struct stream *s,
-                                            struct sbuf *log,
-                                            void *dest,
-                                            int indent)
+/* Functions to manipulate mt_item_lists */
+
+static int isis_mt_item_list_cmp(struct isis_item_list *a, struct isis_item_list *b)
 {
-	struct isis_subtlvs *subtlvs = dest;
-	struct prefix_ipv6 p = {
-		.family = AF_INET6,
+	if (a->mtid < b->mtid)
+		return -1;
+	if (a->mtid > b->mtid)
+		return 1;
+	return 0;
+}
+
+RB_GENERATE_STATIC(isis_mt_item_list, isis_item_list, mt_tree, isis_mt_item_list_cmp);
+
+struct isis_item_list *isis_get_mt_items(struct isis_mt_item_list *m, uint16_t mtid)
+{
+	struct isis_item_list *rv;
+
+	rv = isis_lookup_mt_items(m, mtid);
+	if (!rv) {
+		rv = XMALLOC(MTYPE_ISIS_MT_ITEM_LIST, sizeof(*rv));
+		init_item_list(rv);
+		rv->mtid = mtid;
+		RB_INSERT(isis_mt_item_list, m, rv);
+	}
+
+	return rv;
+}
+
+struct isis_item_list *isis_lookup_mt_items(struct isis_mt_item_list *m, uint16_t mtid)
+{
+	struct isis_item_list key = {
+		.mtid = mtid
 	};
 
-	sbuf_push(log, indent, "Unpacking IPv6 Source Prefix Sub-TLV...\n");
+	return RB_FIND(isis_mt_item_list, m, &key);
+}
 
-	if (tlv_len < 1) {
-		sbuf_push(log, indent, "Not enough data left. "
-		          "(expected 1 or more bytes, got %" PRIu8 ")\n", tlv_len);
-		return 1;
+static void free_mt_items(enum isis_tlv_context context, enum isis_tlv_type type,
+                          struct isis_mt_item_list *m)
+{
+	struct isis_item_list *n, *nnext;
+
+	RB_FOREACH_SAFE(n, isis_mt_item_list, m, nnext) {
+		free_items(context, type, n);
+		RB_REMOVE(isis_mt_item_list, m, n);
+		XFREE(MTYPE_ISIS_MT_ITEM_LIST, n);
+	}
+}
+
+static void format_mt_items(enum isis_tlv_context context, enum isis_tlv_type type,
+                            struct isis_mt_item_list *m, struct sbuf *buf, int indent)
+{
+	struct isis_item_list *n;
+
+	RB_FOREACH(n, isis_mt_item_list, m) {
+		format_items_(n->mtid, context, type, n, buf, indent);
+	}
+}
+
+static int pack_mt_items(enum isis_tlv_context context, enum isis_tlv_type type,
+                         struct isis_mt_item_list *m, struct stream *s)
+{
+	struct isis_item_list *n;
+
+	RB_FOREACH(n, isis_mt_item_list, m) {
+		int rv;
+
+		rv = pack_items_(n->mtid, context, type, n, s);
+		if (rv)
+			return rv;
 	}
 
-	p.prefixlen = stream_getc(s);
-	if (p.prefixlen > 128) {
-		sbuf_push(log, indent, "Prefixlen %u is inplausible for IPv6\n",
-		          p.prefixlen);
-		return 1;
+	return 0;
+}
+
+static void copy_mt_items(enum isis_tlv_context context, enum isis_tlv_type type,
+                          struct isis_mt_item_list *src, struct isis_mt_item_list *dest)
+{
+	struct isis_item_list *n;
+
+	RB_INIT(dest);
+
+	RB_FOREACH(n, isis_mt_item_list, src) {
+		copy_items(context, type, n, isis_get_mt_items(dest, n->mtid));
 	}
+}
 
-	if (tlv_len != 1 + PSIZE(p.prefixlen)) {
-		sbuf_push(log, indent, "TLV size differs from expected size for the prefixlen. "
-		          "(expected %u but got %" PRIu8 ")\n", 1 + PSIZE(p.prefixlen), tlv_len);
-		return 1;
-	}
+/* Functions related to tlvs in general */
 
-	stream_get(&p.prefix, s, PSIZE(p.prefixlen));
+struct isis_tlvs *isis_alloc_tlvs(void)
+{
+	struct isis_tlvs *result;
 
-	if (subtlvs->source_prefix) {
-		sbuf_push(log, indent, "WARNING: source prefix Sub-TLV present multiple times.\n");
-		/* Ignore all but first occurrence of the source prefix Sub-TLV */
-		return 0;
-	}
+	result = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*result));
 
-	subtlvs->source_prefix = XCALLOC(MTYPE_ISIS_SUBTLV, sizeof(p));
-	memcpy(subtlvs->source_prefix, &p, sizeof(p));
+	init_item_list(&result->extended_reach);
+	RB_INIT(&result->mt_reach);
+	init_item_list(&result->extended_ip_reach);
+	RB_INIT(&result->mt_ip_reach);
+	init_item_list(&result->ipv6_reach);
+	RB_INIT(&result->mt_ipv6_reach);
+
+	return result;
+}
+
+struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
+{
+	struct isis_tlvs *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+
+	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
+	           &tlvs->extended_reach, &rv->extended_reach);
+
+	copy_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_REACH,
+	              &tlvs->mt_reach, &rv->mt_reach);
+
+	copy_tlv_protocols_supported(&tlvs->protocols_supported,
+	                             &rv->protocols_supported);
+
+	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
+	           &tlvs->extended_ip_reach, &rv->extended_ip_reach);
+
+	copy_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IP_REACH,
+	              &tlvs->mt_ip_reach, &rv->mt_ip_reach);
+
+	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
+	           &tlvs->ipv6_reach, &rv->ipv6_reach);
+
+	copy_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IPV6_REACH,
+	              &tlvs->mt_ipv6_reach, &rv->mt_ipv6_reach);
+
+	return rv;
+}
+
+static void format_tlvs(struct isis_tlvs *tlvs, struct sbuf *buf, int indent)
+{
+	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
+	             &tlvs->extended_reach, buf, indent);
+
+	format_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_REACH,
+	                &tlvs->mt_reach, buf, indent);
+
+	format_tlv_protocols_supported(&tlvs->protocols_supported, buf, indent);
+
+	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
+	             &tlvs->extended_ip_reach, buf, indent);
+
+	format_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IP_REACH,
+	                &tlvs->mt_ip_reach, buf, indent);
+
+	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
+	             &tlvs->ipv6_reach, buf, indent);
+
+	format_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IPV6_REACH,
+	                &tlvs->mt_ipv6_reach, buf, indent);
+}
+
+const char *isis_format_tlvs(struct isis_tlvs *tlvs)
+{
+	static struct sbuf buf;
+
+	if (!sbuf_buf(&buf))
+		sbuf_init(&buf, NULL, 0);
+
+	sbuf_reset(&buf);
+	format_tlvs(tlvs, &buf, 0);
+	return sbuf_buf(&buf);
+}
+
+void isis_free_tlvs(struct isis_tlvs *tlvs)
+{
+	if (!tlvs)
+		return;
+
+	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
+		   &tlvs->extended_reach);
+	free_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_REACH,
+		   &tlvs->mt_reach);
+	free_tlv_protocols_supported(&tlvs->protocols_supported);
+	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
+		   &tlvs->extended_ip_reach);
+	free_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IP_REACH,
+		   &tlvs->mt_ip_reach);
+	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
+		   &tlvs->ipv6_reach);
+	free_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IPV6_REACH,
+		   &tlvs->mt_ipv6_reach);
+
+	XFREE(MTYPE_ISIS_TLV2, tlvs);
+}
+
+int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream)
+{
+	int rv;
+
+	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
+	                &tlvs->extended_reach, stream);
+	if (rv)
+		return rv;
+
+	rv = pack_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_REACH,
+	                   &tlvs->mt_reach, stream);
+	if (rv)
+		return rv;
+
+	rv = pack_tlv_protocols_supported(&tlvs->protocols_supported, stream);
+	if (rv)
+		return rv;
+
+	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
+	                &tlvs->extended_ip_reach, stream);
+	if (rv)
+		return rv;
+
+	rv = pack_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IP_REACH,
+	                   &tlvs->mt_ip_reach, stream);
+	if (rv)
+		return rv;
+
+	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
+	                &tlvs->ipv6_reach, stream);
+	if (rv)
+		return rv;
+
+	rv = pack_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IPV6_REACH,
+	                   &tlvs->mt_ipv6_reach, stream);
+	if (rv)
+		return rv;
+
 	return 0;
 }
 
@@ -950,31 +1251,6 @@ static int unpack_tlvs(enum isis_tlv_context context,
 	return 0;
 }
 
-struct isis_tlvs *isis_alloc_tlvs(void)
-{
-	struct isis_tlvs *result;
-
-	result = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*result));
-
-	init_item_list(&result->extended_reach);
-	RB_INIT(&result->mt_reach);
-	init_item_list(&result->extended_ip_reach);
-	RB_INIT(&result->mt_ip_reach);
-	init_item_list(&result->ipv6_reach);
-	RB_INIT(&result->mt_ipv6_reach);
-
-	return result;
-}
-
-static struct isis_subtlvs *isis_alloc_subtlvs(void)
-{
-	struct isis_subtlvs *result;
-
-	result = XCALLOC(MTYPE_ISIS_SUBTLV, sizeof(*result));
-
-	return result;
-}
-
 int isis_unpack_tlvs(size_t avail_len,
 		     struct stream *stream,
 		     struct isis_tlvs **dest,
@@ -1003,288 +1279,6 @@ int isis_unpack_tlvs(size_t avail_len,
 
 	*log = sbuf_buf(&logbuf);
 	*dest = result;
-
-	return rv;
-}
-
-static void format_subtlv_ipv6_source_prefix(struct prefix_ipv6 *p, struct sbuf *buf, int indent)
-{
-	if (!p)
-		return;
-
-	char prefixbuf[PREFIX2STR_BUFFER];
-	sbuf_push(buf, indent, "IPv6 Source Prefix: %s\n",
-	          prefix2str(p, prefixbuf, sizeof(prefixbuf)));
-}
-
-static void format_subtlvs(struct isis_subtlvs *subtlvs, struct sbuf *buf, int indent)
-{
-	format_subtlv_ipv6_source_prefix(subtlvs->source_prefix, buf, indent);
-}
-
-
-static void format_item_extended_reach(uint16_t mtid, struct isis_item *i,
-                                       struct sbuf *buf, int indent)
-{
-	struct isis_extended_reach *r = (struct isis_extended_reach*)i;
-
-	sbuf_push(buf, indent, "%s Reachability:\n",
-	          (mtid == ISIS_MT_IPV4_UNICAST) ? "Extended" : "MT");
-	sbuf_push(buf, indent, "  ID: %s\n", isis_format_id(r->id, 7));
-	sbuf_push(buf, indent, "  Metric: %u\n", r->metric);
-	if (mtid != ISIS_MT_IPV4_UNICAST)
-		sbuf_push(buf, indent, "  Topology: %s\n", isis_mtid2str(mtid));
-#if 0
-	if (r->subtlvs) {
-		sbuf_push(buf, indent, "  Subtlvs:\n");
-		format_tlvs(r->subtlvs, buf, indent + 4);
-	}
-#endif
-}
-
-static void format_tlv_protocols_supported(struct isis_protocols_supported *p,
-                                           struct sbuf *buf, int indent)
-{
-	if (!p || !p->count || !p->protocols)
-		return;
-
-	sbuf_push(buf, indent, "Protocols Supported:\n");
-	for (uint8_t i = 0; i < p->count; i++) {
-		sbuf_push(buf, indent + 2, "%s\n", nlpid2str(p->protocols[i]));
-	}
-}
-
-static void format_item_extended_ip_reach(uint16_t mtid, struct isis_item *i,
-                                          struct sbuf *buf, int indent)
-{
-	struct isis_extended_ip_reach *r = (struct isis_extended_ip_reach*)i;
-	char prefixbuf[64];
-
-	sbuf_push(buf, indent, "%s IP Reachability:\n",
-	          (mtid == ISIS_MT_IPV4_UNICAST) ? "Extended" : "MT");
-	sbuf_push(buf, indent, "  Metric: %u\n", r->metric);
-	sbuf_push(buf, indent, "  Down: %s\n", r->down ? "Yes" : "No");
-	sbuf_push(buf, indent, "  Prefix: %s\n", prefix2str(&r->prefix, prefixbuf,
-	                                                    sizeof(prefixbuf)));
-	if (mtid != ISIS_MT_IPV4_UNICAST)
-		sbuf_push(buf, indent, "  Topology: %s\n", isis_mtid2str(mtid));
-#if 0
-	if (r->subtlvs) {
-		sbuf_push(buf, indent, "  Subtlvs:\n");
-		format_tlvs(r->subtlvs, buf, indent + 4);
-	}
-#endif
-}
-
-static void format_item_ipv6_reach(uint16_t mtid, struct isis_item *i,
-                                   struct sbuf *buf, int indent)
-{
-	struct isis_ipv6_reach *r = (struct isis_ipv6_reach*)i;
-	char prefixbuf[PREFIX2STR_BUFFER];
-
-	sbuf_push(buf, indent, "%sIPv6 Reachability:\n",
-	          (mtid == ISIS_MT_IPV4_UNICAST) ? "" : "MT ");
-	sbuf_push(buf, indent, "  Metric: %u\n", r->metric);
-	sbuf_push(buf, indent, "  Down: %s\n", r->down ? "Yes" : "No");
-	sbuf_push(buf, indent, "  External: %s\n", r->external ? "Yes" : "No");
-	sbuf_push(buf, indent, "  Prefix: %s\n", prefix2str(&r->prefix, prefixbuf,
-	                                                    sizeof(prefixbuf)));
-	if (mtid != ISIS_MT_IPV4_UNICAST)
-		sbuf_push(buf, indent, "  Topology: %s\n", isis_mtid2str(mtid));
-
-	if (r->subtlvs) {
-		sbuf_push(buf, indent, "  Subtlvs:\n");
-		format_subtlvs(r->subtlvs, buf, indent + 4);
-	}
-}
-
-static void format_item(uint16_t mtid, enum isis_tlv_context context,
-                        enum isis_tlv_type type, struct isis_item *i,
-                        struct sbuf *buf, int indent)
-{
-	const struct tlv_ops *ops = tlv_table[context][type];
-
-	if (ops && ops->format_item) {
-		ops->format_item(mtid, i, buf, indent);
-		return;
-	}
-
-	assert(!"Unknown item tlv type!");
-}
-
-static void format_items_(uint16_t mtid, enum isis_tlv_context context,
-                          enum isis_tlv_type type, struct isis_item_list *items,
-                          struct sbuf *buf, int indent)
-{
-	struct isis_item *i;
-
-	for (i = items->head; i; i = i->next)
-		format_item(mtid, context, type, i, buf, indent);
-}
-
-#define format_items(...) format_items_(ISIS_MT_IPV4_UNICAST, __VA_ARGS__)
-
-static void format_tlvs(struct isis_tlvs *tlvs, struct sbuf *buf, int indent)
-{
-	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
-	             &tlvs->extended_reach, buf, indent);
-
-	format_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_REACH,
-	                &tlvs->mt_reach, buf, indent);
-
-	format_tlv_protocols_supported(&tlvs->protocols_supported, buf, indent);
-
-	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
-	             &tlvs->extended_ip_reach, buf, indent);
-
-	format_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IP_REACH,
-	                &tlvs->mt_ip_reach, buf, indent);
-
-	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
-	             &tlvs->ipv6_reach, buf, indent);
-
-	format_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IPV6_REACH,
-	                &tlvs->mt_ipv6_reach, buf, indent);
-}
-
-const char *isis_format_tlvs(struct isis_tlvs *tlvs)
-{
-	static struct sbuf buf;
-
-	if (!sbuf_buf(&buf))
-		sbuf_init(&buf, NULL, 0);
-
-	sbuf_reset(&buf);
-	format_tlvs(tlvs, &buf, 0);
-	return sbuf_buf(&buf);
-}
-
-static struct prefix_ipv6 *copy_subtlv_ipv6_source_prefix(struct prefix_ipv6 *p)
-{
-	if (!p)
-		return NULL;
-
-	struct prefix_ipv6 *rv = XCALLOC(MTYPE_ISIS_SUBTLV, sizeof(*rv));
-	rv->family = p->family;
-	rv->prefixlen = p->prefixlen;
-	memcpy(&rv->prefix, &p->prefix, sizeof(rv->prefix));
-	return rv;
-}
-
-static struct isis_subtlvs *copy_subtlvs(struct isis_subtlvs *subtlvs)
-{
-	if (!subtlvs)
-		return NULL;
-
-	struct isis_subtlvs *rv = XCALLOC(MTYPE_ISIS_SUBTLV, sizeof(*rv));
-
-	rv->source_prefix = copy_subtlv_ipv6_source_prefix(subtlvs->source_prefix);
-	return rv;
-}
-
-static struct isis_item *copy_item_extended_reach(struct isis_item *i)
-{
-	struct isis_extended_reach *r = (struct isis_extended_reach*)i;
-	struct isis_extended_reach *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
-
-	memcpy(rv->id, r->id, 7);
-	rv->metric = r->metric;
-#if 0
-	rv->subtlvs = isis_copy_tlvs(r->subtlvs);
-#endif
-
-	return (struct isis_item*)rv;
-}
-
-static struct isis_item *copy_item_extended_ip_reach(struct isis_item *i)
-{
-	struct isis_extended_ip_reach *r = (struct isis_extended_ip_reach*)i;
-	struct isis_extended_ip_reach *rv = XCALLOC(MTYPE_ISIS_TLV2,
-						    sizeof(*rv));
-
-	rv->metric = r->metric;
-	rv->down = r->down;
-	rv->prefix = r->prefix;
-#if 0
-	rv->subtlvs = isis_copy_tlvs(r->subtlvs);
-#endif
-
-	return (struct isis_item*)rv;
-}
-
-static struct isis_item *copy_item_ipv6_reach(struct isis_item *i)
-{
-	struct isis_ipv6_reach *r = (struct isis_ipv6_reach*)i;
-	struct isis_ipv6_reach *rv = XCALLOC(MTYPE_ISIS_TLV2,
-	                                     sizeof(*rv));
-	rv->metric = r->metric;
-	rv->down = r->down;
-	rv->external = r->external;
-	rv->prefix = r->prefix;
-	rv->subtlvs = copy_subtlvs(r->subtlvs);
-
-	return (struct isis_item*)rv;
-}
-
-static struct isis_item *copy_item(enum isis_tlv_context context,
-				   enum isis_tlv_type type,
-				   struct isis_item *item)
-{
-	const struct tlv_ops *ops = tlv_table[context][type];
-
-	if (ops && ops->copy_item)
-		return ops->copy_item(item);
-
-	assert(!"Unknown item tlv type!");
-	return NULL;
-}
-
-static void copy_items(enum isis_tlv_context context, enum isis_tlv_type type,
-                       struct isis_item_list *src, struct isis_item_list *dest)
-{
-	struct isis_item *item;
-
-	init_item_list(dest);
-
-	for (item = src->head; item; item = item->next) {
-		append_item(dest, copy_item(context, type, item));
-	}
-}
-
-static void copy_tlv_protocols_supported(struct isis_protocols_supported *src,
-                                         struct isis_protocols_supported *dest)
-{
-	if (!src->protocols || !src->count)
-		return;
-	dest->count = src->count;
-	dest->protocols = XMALLOC(MTYPE_ISIS_TLV2, src->count);
-	memcpy(dest->protocols, src->protocols, src->count);
-}
-
-struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
-{
-	struct isis_tlvs *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
-
-	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
-	           &tlvs->extended_reach, &rv->extended_reach);
-
-	copy_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_REACH,
-	              &tlvs->mt_reach, &rv->mt_reach);
-
-	copy_tlv_protocols_supported(&tlvs->protocols_supported,
-	                             &rv->protocols_supported);
-
-	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
-	           &tlvs->extended_ip_reach, &rv->extended_ip_reach);
-
-	copy_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IP_REACH,
-	              &tlvs->mt_ip_reach, &rv->mt_ip_reach);
-
-	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
-	           &tlvs->ipv6_reach, &rv->ipv6_reach);
-
-	copy_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IPV6_REACH,
-	              &tlvs->mt_ipv6_reach, &rv->mt_ipv6_reach);
 
 	return rv;
 }
