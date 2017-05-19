@@ -379,6 +379,7 @@ static int unpack_tlv_protocols_supported(enum isis_tlv_context context,
 	}
 	if (tlvs->protocols_supported.protocols) {
 		sbuf_push(log, indent, "WARNING: protocols supported TLV present multiple times.\n");
+		stream_forward_getp(s, tlv_len);
 		return 0;
 	}
 
@@ -566,6 +567,87 @@ out:
 	if (rv)
 		free_item_extended_ip_reach((struct isis_item*)rv);
 	return 1;
+}
+
+/* Functions related to TLV 137 Dynamic Hostname */
+
+static char *copy_tlv_dynamic_hostname(const char *hostname)
+{
+	if (!hostname)
+		return NULL;
+
+	return XSTRDUP(MTYPE_ISIS_TLV2, hostname);
+}
+
+static void format_tlv_dynamic_hostname(const char *hostname,
+                                        struct sbuf *buf, int indent)
+{
+	if (!hostname)
+		return;
+
+	sbuf_push(buf, indent, "Hostname: %s\n", hostname);
+}
+
+static void free_tlv_dynamic_hostname(char *hostname)
+{
+	XFREE(MTYPE_ISIS_TLV2, hostname);
+}
+
+static int pack_tlv_dynamic_hostname(const char *hostname,
+                                     struct stream *s)
+{
+	if (!hostname)
+		return 0;
+
+	uint8_t name_len = strlen(hostname);
+
+	if (STREAM_WRITEABLE(s) < (unsigned)(2 + name_len))
+		return 1;
+
+	stream_putc(s, ISIS_TLV_DYNAMIC_HOSTNAME);
+	stream_putc(s, name_len);
+	stream_put(s, hostname, name_len);
+	return 0;
+}
+
+static int unpack_tlv_dynamic_hostname(enum isis_tlv_context context,
+                                       uint8_t tlv_type,
+                                       uint8_t tlv_len,
+                                       struct stream *s,
+                                       struct sbuf *log,
+                                       void *dest,
+                                       int indent)
+{
+	struct isis_tlvs *tlvs = dest;
+
+	sbuf_push(log, indent, "Unpacking Dynamic Hostname TLV...\n");
+	if (!tlv_len) {
+		sbuf_push(log, indent, "WARNING: No hostname included\n");
+		return 0;
+	}
+
+	if (tlvs->hostname) {
+		sbuf_push(log, indent, "WARNING: Hostname present multiple times.\n");
+		stream_forward_getp(s, tlv_len);
+		return 0;
+	}
+
+	tlvs->hostname = XMALLOC(MTYPE_ISIS_TLV2, tlv_len + 1);
+	stream_get(tlvs->hostname, s, tlv_len);
+	tlvs->hostname[tlv_len] = '\0';
+
+	bool sane = true;
+	for (uint8_t i = 0; i < tlv_len; i++) {
+		if ((unsigned char)tlvs->hostname[i] > 127 || !isprint(tlvs->hostname[i])) {
+			sane = false;
+			tlvs->hostname[i] = '?';
+		}
+	}
+	if (!sane) {
+		sbuf_push(log, indent, "WARNING: Hostname contained non-printable/non-ascii characters.\n");
+	}
+
+	return 0;
 }
 
 /* Functions related to TLVs 236/237 IPv6/MT-IPv6 reach */
@@ -1068,6 +1150,8 @@ struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
 	copy_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IP_REACH,
 	              &tlvs->mt_ip_reach, &rv->mt_ip_reach);
 
+	rv->hostname = copy_tlv_dynamic_hostname(tlvs->hostname);
+
 	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
 	           &tlvs->ipv6_reach, &rv->ipv6_reach);
 
@@ -1079,13 +1163,15 @@ struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
 
 static void format_tlvs(struct isis_tlvs *tlvs, struct sbuf *buf, int indent)
 {
+	format_tlv_protocols_supported(&tlvs->protocols_supported, buf, indent);
+
+	format_tlv_dynamic_hostname(tlvs->hostname, buf, indent);
+
 	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
 	             &tlvs->extended_reach, buf, indent);
 
 	format_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_REACH,
 	                &tlvs->mt_reach, buf, indent);
-
-	format_tlv_protocols_supported(&tlvs->protocols_supported, buf, indent);
 
 	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
 	             &tlvs->extended_ip_reach, buf, indent);
@@ -1126,6 +1212,7 @@ void isis_free_tlvs(struct isis_tlvs *tlvs)
 		   &tlvs->extended_ip_reach);
 	free_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IP_REACH,
 		   &tlvs->mt_ip_reach);
+	free_tlv_dynamic_hostname(tlvs->hostname);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_REACH,
 		   &tlvs->ipv6_reach);
 	free_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IPV6_REACH,
@@ -1138,6 +1225,14 @@ int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream)
 {
 	int rv;
 
+	rv = pack_tlv_protocols_supported(&tlvs->protocols_supported, stream);
+	if (rv)
+		return rv;
+
+	rv = pack_tlv_dynamic_hostname(tlvs->hostname, stream);
+	if (rv)
+		return rv;
+
 	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
 	                &tlvs->extended_reach, stream);
 	if (rv)
@@ -1145,10 +1240,6 @@ int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream)
 
 	rv = pack_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_REACH,
 	                   &tlvs->mt_reach, stream);
-	if (rv)
-		return rv;
-
-	rv = pack_tlv_protocols_supported(&tlvs->protocols_supported, stream);
 	if (rv)
 		return rv;
 
@@ -1310,6 +1401,7 @@ int isis_unpack_tlvs(size_t avail_len,
 ITEM_TLV_OPS(extended_reach, "TLV 22 Extended Reachability");
 TLV_OPS(protocols_supported, "TLV 129 Protocols Supported");
 ITEM_TLV_OPS(extended_ip_reach, "TLV 135 Extended IP Reachability");
+TLV_OPS(dynamic_hostname, "TLV 137 Dynamic Hostname");
 ITEM_TLV_OPS(ipv6_reach, "TLV 236 IPv6 Reachability");
 
 SUBTLV_OPS(ipv6_source_prefix, "Sub-TLV 22 IPv6 Source Prefix");
@@ -1321,6 +1413,7 @@ static const struct tlv_ops *tlv_table[ISIS_CONTEXT_MAX][ISIS_TLV_MAX] = {
 		[ISIS_TLV_PROTOCOLS_SUPPORTED] = &tlv_protocols_supported_ops,
 		[ISIS_TLV_EXTENDED_IP_REACH] = &tlv_extended_ip_reach_ops,
 		[ISIS_TLV_MT_IP_REACH] = &tlv_extended_ip_reach_ops,
+		[ISIS_TLV_DYNAMIC_HOSTNAME] = &tlv_dynamic_hostname_ops,
 		[ISIS_TLV_IPV6_REACH] = &tlv_ipv6_reach_ops,
 		[ISIS_TLV_MT_IPV6_REACH] = &tlv_ipv6_reach_ops,
 	},

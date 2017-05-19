@@ -66,6 +66,7 @@ struct isis_tlvs {
 	struct isis_protocols_supported protocols_supported;
 	struct isis_item_list extended_ip_reach;
 	struct isis_mt_item_list mt_ip_reach;
+	char *hostname;
 	struct isis_item_list ipv6_reach;
 	struct isis_mt_item_list mt_ipv6_reach;
 };
@@ -89,6 +90,7 @@ enum isis_tlv_type {
 
 	ISIS_TLV_PROTOCOLS_SUPPORTED = 129,
 	ISIS_TLV_EXTENDED_IP_REACH = 135,
+	ISIS_TLV_DYNAMIC_HOSTNAME = 137,
 	ISIS_TLV_MT_REACH = 222,
 	ISIS_TLV_MT_IP_REACH = 235,
 	ISIS_TLV_IPV6_REACH = 236,
