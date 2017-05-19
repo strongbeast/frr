@@ -283,6 +283,9 @@ void zlog_metaf(struct zlogmeta_frame *frame, struct zlogmeta_key *key,
 	zlog_meta(frame, key, buf);
 }
 
+struct zlogmeta_key zl_THR_ID = { "THR_ID" };
+struct zlogmeta_key zl_THR_NAME = { "THR_NAME" };
+
 struct zlogmeta_key zl_VRF = { "VRF" };
 struct zlogmeta_key zl_REMOTE = { "REMOTE" };
 struct zlogmeta_key zl_PREFIX = { "PREFIX" };

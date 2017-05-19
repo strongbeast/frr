@@ -128,6 +128,10 @@ static inline void zlogmeta_pop(struct zlogmeta_frame *frame)
 		__attribute__((cleanup(zlogmeta_pop))) \
 		= { .up = zlogmeta_stackptr }; \
 	zlogmeta_stackptr = &zlogmeta_frame
+#define STATIC_ZLOGMETA_FRAME() \
+	static struct zlogmeta_frame zlogmeta_frame; \
+	zlogmeta_frame.up = zlogmeta_stackptr; \
+	zlogmeta_stackptr = &zlogmeta_frame
 
 /*
  * log message prefix prepending
@@ -157,6 +161,9 @@ extern void zlog_metaf(struct zlogmeta_frame *frame, struct zlogmeta_key *key,
 		alloca(256), 256, __VA_ARGS__)
 
 /* global keys */
+extern struct zlogmeta_key zl_THR_ID;		/* thread ID */
+extern struct zlogmeta_key zl_THR_NAME;		/* thread name */
+
 extern struct zlogmeta_key zl_VRF;		/* VRF ID */
 extern struct zlogmeta_key zl_REMOTE;		/* remote system / packet address */
 extern struct zlogmeta_key zl_PREFIX;		/* route destination prefix */

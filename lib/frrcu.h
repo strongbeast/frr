@@ -11,6 +11,7 @@ extern void rcu_init(void);
  * RCU protection;  it will hold the reference across creation of the new
  * thread */
 extern int rcu_thread_create(pthread_t *thread, const pthread_attr_t *attr,
+		const char *name,
 		void *(*thread_fn)(void *arg), void *arg);
 
 extern void rcu_hold(void);

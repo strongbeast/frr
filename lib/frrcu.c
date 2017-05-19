@@ -1,9 +1,11 @@
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
 #include "frrcu.h"
 #include "seqlock.h"
 #include "atomlist.h"
+#include "zlog.h"
 
 DEFINE_MTYPE_STATIC(LIB, RCU_THREAD,    "RCU thread")
 DEFINE_MTYPE_STATIC(LIB, RCU_FREE_ITEM, "RCU free queue item")
@@ -17,6 +19,7 @@ struct rcu_thread {
 	struct seqlock rcu;
 	bool bump_on_release;
 
+	const char *name;
 	void *thread_arg;
 	void *(*thread_fn)(void *);
 };
@@ -34,6 +37,36 @@ static void rcu_start(void);
 static inline bool rcu_active(void)
 {
 	return atomic_load_explicit(&rcu_num_threads, memory_order_relaxed) > 1;
+}
+
+#ifdef __linux__
+#include <sys/syscall.h>
+#endif
+#ifdef __APPLE__
+#include <mach/mach.h>
+#endif
+
+/* stolen from ppl who stole it from ppl who stole it from Wine :D */
+static long thread_id(void)
+{
+	long ret = -1;
+#if defined(__linux__)
+	ret = syscall(SYS_gettid);
+#elif defined(__APPLE__)
+	ret = mach_thread_self();
+	mach_port_deallocate(mach_task_self(), ret);
+#elif defined(__NetBSD__)
+	ret = _lwp_self();
+#elif defined(__FreeBSD__)
+	long lwpid;
+	thr_self(&lwpid);
+	ret = lwpid;
+#elif defined(__DragonFly__)
+	ret = lwp_gettid();
+#else
+	ret = (long)pthread_self();
+#endif
+	return ret;
 }
 
 /*
@@ -56,7 +89,12 @@ static void rcu_preinit(void)
 
 void rcu_init(void)
 {
-	/* nothing currently */
+	STATIC_ZLOGMETA_FRAME();
+	static char tid_string[32];
+
+	snprintf(tid_string, sizeof(tid_string), "%ld", thread_id());
+	ZLOG_META(&zl_THR_ID, tid_string);
+	ZLOG_META(&zl_THR_NAME, "main thread");
 }
 
 /*
@@ -88,6 +126,10 @@ static void *rcu_thread_start(void *arg)
 {
 	struct rcu_thread *rt = arg;
 	void *rv;
+	ZLOGMETA_FRAME();
+
+	ZLOG_METAF(&zl_THR_ID, "%ld", thread_id());
+	ZLOG_META(&zl_THR_NAME, rt->name);
 
 	rcu_this = rt;
 	pthread_cleanup_push(rcu_thread_end, NULL);
@@ -97,12 +139,14 @@ static void *rcu_thread_start(void *arg)
 }
 
 int rcu_thread_create(pthread_t *thread, const pthread_attr_t *attr,
+		const char *name,
 		void *(*thread_fn)(void *arg), void *arg)
 {
 	int rv;
 	struct rcu_thread *rt = rcu_thread_setup();
 
 	seqlock_acquire(&rt->rcu, &rcu_this->rcu);
+	rt->name = name;
 	rt->thread_arg = arg;
 	rt->thread_fn = thread_fn;
 

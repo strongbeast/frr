@@ -21,6 +21,7 @@
 #include <zebra.h>
 
 #include "libfrr.h"
+#include "frrcu.h"
 #include "getopt.h"
 #include "vty.h"
 #include "command.h"
@@ -342,6 +343,7 @@ struct thread_master *frr_init(void)
 	dir = di->module_path ? di->module_path : frr_moduledir;
 
 	srandom(time(NULL));
+	rcu_init();
 
 	if (di->instance)
 		snprintf(frr_protonameinst, sizeof(frr_protonameinst),
