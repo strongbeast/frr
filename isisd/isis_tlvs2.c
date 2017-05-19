@@ -9,6 +9,7 @@
 #include "isis_tlvs2.h"
 #include "isis_common2.h"
 #include "isisd/isis_mt.h"
+#include "isisd/isis_misc.h"
 
 DEFINE_MTYPE_STATIC(ISISD, ISIS_TLV2, "ISIS TLVs (new)")
 DEFINE_MTYPE_STATIC(ISISD, ISIS_SUBTLV, "ISIS Sub-TLVs")
@@ -210,6 +211,21 @@ static int pack_item_extended_reach(struct isis_item *i,
 	return 0;
 }
 
+static int pack_tlv_protocols_supported(struct isis_protocols_supported *p,
+                                        struct stream *s)
+{
+	if (!p || !p->count || !p->protocols)
+		return 0;
+
+	if (STREAM_WRITEABLE(s) < (unsigned)(p->count + 2))
+		return 1;
+
+	stream_putc(s, ISIS_TLV_PROTOCOLS_SUPPORTED);
+	stream_putc(s, p->count);
+	stream_put(s, p->protocols, p->count);
+	return 0;
+}
+
 static int pack_item_extended_ip_reach(struct isis_item *i,
 				       struct stream *s)
 {
@@ -354,6 +370,10 @@ int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream)
 	if (rv)
 		return rv;
 
+	rv = pack_tlv_protocols_supported(&tlvs->protocols_supported, stream);
+	if (rv)
+		return rv;
+
 	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
 	                &tlvs->extended_ip_reach, stream);
 	if (rv)
@@ -391,6 +411,11 @@ static void free_item_extended_reach(struct isis_item *i)
 {
 	struct isis_extended_reach *item = (struct isis_extended_reach*)i;
 	XFREE(MTYPE_ISIS_TLV2, item);
+}
+
+static void free_tlv_protocols_supported(struct isis_protocols_supported *p)
+{
+	XFREE(MTYPE_ISIS_TLV2, p->protocols);
 }
 
 static void free_item_extended_ip_reach(struct isis_item *i)
@@ -441,6 +466,7 @@ void isis_free_tlvs(struct isis_tlvs *tlvs)
 		   &tlvs->extended_reach);
 	free_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_REACH,
 		   &tlvs->mt_reach);
+	free_tlv_protocols_supported(&tlvs->protocols_supported);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
 		   &tlvs->extended_ip_reach);
 	free_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IP_REACH,
@@ -520,6 +546,37 @@ out:
 		free_item_extended_reach((struct isis_item*)rv);
 
 	return 1;
+}
+
+static void format_tlv_protocols_supported(struct isis_protocols_supported *p,
+                                           struct sbuf *buf, int indent);
+
+static int unpack_tlv_protocols_supported(enum isis_tlv_context context,
+                                          uint8_t tlv_type,
+                                          uint8_t tlv_len,
+                                          struct stream *s,
+                                          struct sbuf *log,
+                                          void *dest,
+                                          int indent)
+{
+	struct isis_tlvs *tlvs = dest;
+
+	sbuf_push(log, indent, "Unpacking Protocols Supported TLV...\n");
+	if (!tlv_len) {
+		sbuf_push(log, indent, "WARNING: No protocols included\n");
+		return 0;
+	}
+	if (tlvs->protocols_supported.protocols) {
+		sbuf_push(log, indent, "WARNING: protocols supported TLV present multiple times.\n");
+		return 0;
+	}
+
+	tlvs->protocols_supported.count = tlv_len;
+	tlvs->protocols_supported.protocols = XMALLOC(MTYPE_ISIS_TLV2, tlv_len);
+	stream_get(tlvs->protocols_supported.protocols, s, tlv_len);
+
+	format_tlv_protocols_supported(&tlvs->protocols_supported, log, indent + 2);
+	return 0;
 }
 
 static void format_item_extended_ip_reach(uint16_t mtid, struct isis_item *i,
@@ -985,6 +1042,18 @@ static void format_item_extended_reach(uint16_t mtid, struct isis_item *i,
 #endif
 }
 
+static void format_tlv_protocols_supported(struct isis_protocols_supported *p,
+                                           struct sbuf *buf, int indent)
+{
+	if (!p || !p->count || !p->protocols)
+		return;
+
+	sbuf_push(buf, indent, "Protocols Supported:\n");
+	for (uint8_t i = 0; i < p->count; i++) {
+		sbuf_push(buf, indent + 2, "%s\n", nlpid2str(p->protocols[i]));
+	}
+}
+
 static void format_item_extended_ip_reach(uint16_t mtid, struct isis_item *i,
                                           struct sbuf *buf, int indent)
 {
@@ -1062,6 +1131,8 @@ static void format_tlvs(struct isis_tlvs *tlvs, struct sbuf *buf, int indent)
 
 	format_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_REACH,
 	                &tlvs->mt_reach, buf, indent);
+
+	format_tlv_protocols_supported(&tlvs->protocols_supported, buf, indent);
 
 	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
 	             &tlvs->extended_ip_reach, buf, indent);
@@ -1180,6 +1251,16 @@ static void copy_items(enum isis_tlv_context context, enum isis_tlv_type type,
 	}
 }
 
+static void copy_tlv_protocols_supported(struct isis_protocols_supported *src,
+                                         struct isis_protocols_supported *dest)
+{
+	if (!src->protocols || !src->count)
+		return;
+	dest->count = src->count;
+	dest->protocols = XMALLOC(MTYPE_ISIS_TLV2, src->count);
+	memcpy(dest->protocols, src->protocols, src->count);
+}
+
 struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
 {
 	struct isis_tlvs *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
@@ -1189,6 +1270,9 @@ struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
 
 	copy_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_REACH,
 	              &tlvs->mt_reach, &rv->mt_reach);
+
+	copy_tlv_protocols_supported(&tlvs->protocols_supported,
+	                             &rv->protocols_supported);
 
 	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
 	           &tlvs->extended_ip_reach, &rv->extended_ip_reach);
@@ -1230,6 +1314,7 @@ struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
 	}
 
 ITEM_TLV_OPS(extended_reach, "TLV 22 Extended Reachability");
+TLV_OPS(protocols_supported, "TLV 129 Protocols Supported");
 ITEM_TLV_OPS(extended_ip_reach, "TLV 135 Extended IP Reachability");
 ITEM_TLV_OPS(ipv6_reach, "TLV 236 IPv6 Reachability");
 
@@ -1238,8 +1323,9 @@ SUBTLV_OPS(ipv6_source_prefix, "Sub-TLV 22 IPv6 Source Prefix");
 static const struct tlv_ops *tlv_table[ISIS_CONTEXT_MAX][ISIS_TLV_MAX] = {
 	[ISIS_CONTEXT_LSP] = {
 		[ISIS_TLV_EXTENDED_REACH] = &tlv_extended_reach_ops,
-		[ISIS_TLV_EXTENDED_IP_REACH] = &tlv_extended_ip_reach_ops,
 		[ISIS_TLV_MT_REACH] = &tlv_extended_reach_ops,
+		[ISIS_TLV_PROTOCOLS_SUPPORTED] = &tlv_protocols_supported_ops,
+		[ISIS_TLV_EXTENDED_IP_REACH] = &tlv_extended_ip_reach_ops,
 		[ISIS_TLV_MT_IP_REACH] = &tlv_extended_ip_reach_ops,
 		[ISIS_TLV_IPV6_REACH] = &tlv_ipv6_reach_ops,
 		[ISIS_TLV_MT_IPV6_REACH] = &tlv_ipv6_reach_ops,

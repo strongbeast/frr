@@ -36,6 +36,11 @@ struct isis_ipv6_reach {
 	struct isis_subtlvs *subtlvs;
 };
 
+struct isis_protocols_supported {
+	uint8_t count;
+	uint8_t *protocols;
+};
+
 struct isis_item;
 struct isis_item {
 	struct isis_item *next;
@@ -58,6 +63,7 @@ struct isis_item_list *isis_lookup_mt_items(struct isis_mt_item_list *m, uint16_
 struct isis_tlvs {
 	struct isis_item_list extended_reach;
 	struct isis_mt_item_list mt_reach;
+	struct isis_protocols_supported protocols_supported;
 	struct isis_item_list extended_ip_reach;
 	struct isis_mt_item_list mt_ip_reach;
 	struct isis_item_list ipv6_reach;
@@ -80,6 +86,8 @@ enum isis_tlv_context {
 enum isis_tlv_type {
 	ISIS_TLV_PADDING = 8,
 	ISIS_TLV_EXTENDED_REACH = 22,
+
+	ISIS_TLV_PROTOCOLS_SUPPORTED = 129,
 	ISIS_TLV_EXTENDED_IP_REACH = 135,
 	ISIS_TLV_MT_REACH = 222,
 	ISIS_TLV_MT_IP_REACH = 235,
