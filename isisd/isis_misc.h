@@ -46,6 +46,7 @@ const char *sysid_print (const u_char *);
 const char *snpa_print (const u_char *);
 const char *rawlspid_print (const u_char *);
 const char *time2string (u_int32_t);
+const char *nlpid2str(uint8_t nlpid);
 /* typedef struct nlpids nlpids; */
 char *nlpid2string (struct nlpids *);
 const char *print_sys_hostname (const u_char *sysid);

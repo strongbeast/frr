@@ -205,6 +205,28 @@ sysid2buff (u_char * buff, const char * dotted)
 
 }
 
+const char *
+nlpid2str (uint8_t nlpid)
+{
+  static char buf[4];
+  switch (nlpid)
+    {
+    case NLPID_IP:
+      return "IPv4";
+    case NLPID_IPV6:
+      return "IPv6";
+    case NLPID_SNAP:
+      return "SNAP";
+    case NLPID_CLNP:
+      return "CLNP";
+    case NLPID_ESIS:
+      return "ES-IS";
+    default:
+      snprintf(buf, sizeof(buf), "%" PRIu8, nlpid);
+      return buf;
+    }
+}
+
 /*
  * converts the nlpids struct (filled by TLV #129)
  * into a string
@@ -218,30 +240,9 @@ nlpid2string (struct nlpids *nlpids)
 
   for (i = 0; i < nlpids->count; i++)
     {
-      switch (nlpids->nlpids[i])
-	{
-	case NLPID_IP:
-	  pos += sprintf (pos, "IPv4");
-	  break;
-	case NLPID_IPV6:
-	  pos += sprintf (pos, "IPv6");
-	  break;
-	case NLPID_SNAP:
-	  pos += sprintf (pos, "SNAP");
-	  break;
-	case NLPID_CLNP:
-	  pos += sprintf (pos, "CLNP");
-	  break;
-	case NLPID_ESIS:
-	  pos += sprintf (pos, "ES-IS");
-	  break;
-	default:
-	  pos += sprintf (pos, "unknown");
-	  break;
-	}
+      pos += sprintf (pos, nlpid2str(nlpids->nlpids[i]));
       if (nlpids->count - i > 1)
-	pos += sprintf (pos, ", ");
-
+        pos += sprintf (pos, ", ");
     }
 
   *(pos) = '\0';
