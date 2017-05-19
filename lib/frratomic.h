@@ -25,6 +25,10 @@
 #error autoconf checks for atomic functions were not properly run
 #endif
 
+#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 201112L
+#define _Thread_local __thread
+#endif
+
 /* ISO C11 */
 #ifdef HAVE_STDATOMIC_H
 #include <stdatomic.h>
