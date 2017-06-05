@@ -1027,10 +1027,8 @@ zsend_pw_update (int cmd, struct zserv *client, struct zebra_pw_t *pw,
 
   zserv_create_header (s, cmd, vrf_id);
   stream_write (s, pw->ifname, IF_NAMESIZE);
-  /* stream_putw(s, pw->ifindex); */
-  /* stream_putl(s, pw->pwid); */
-  stream_put(s, pw->vpn_name, L2VPN_NAME_LEN);
-  stream_putc(s, status);
+  stream_putl (s, pw->ifindex);
+  stream_putc (s, status);
 
   /* Put length at the first point of the stream. */
   stream_putw_at(s, 0, stream_get_endp(s));
@@ -1959,8 +1957,8 @@ zread_label_manager_request (int cmd, struct zserv *client, vrf_id_t vrf_id)
 }
 
 static int
-zread_kpw (int command, struct zserv *client, u_short length,
-           vrf_id_t vrf_id)
+zread_pseudowire (int command, struct zserv *client, u_short length,
+		  vrf_id_t vrf_id)
 {
   struct stream *s;
   struct zebra_pw_t *pw;
@@ -1971,17 +1969,16 @@ zread_kpw (int command, struct zserv *client, u_short length,
 
   /* Get data. */
   stream_get (pw->ifname, s, IF_NAMESIZE);
-  pw->ifindex = stream_getw (s);
+  pw->ifindex = stream_getl (s);
   pw->pw_type = stream_getl (s);
-  pw->lsr_id.s_addr = stream_getl (s);
   pw->af = stream_getl (s);
   switch (pw->af)
     {
     case AF_INET:
-      pw->nexthop.v4.s_addr = stream_get_ipv4 (s);
+      pw->nexthop.ipv4.s_addr = stream_get_ipv4 (s);
       break;
     case AF_INET6:
-      stream_get (&pw->nexthop.v6, s, 16);
+      stream_get (&pw->nexthop.ipv6, s, 16);
       break;
     default:
       return (-1);
@@ -1989,9 +1986,6 @@ zread_kpw (int command, struct zserv *client, u_short length,
   pw->local_label = stream_getl (s);
   pw->remote_label = stream_getl (s);
   pw->flags = stream_getc (s);
-  pw->pwid = stream_getl (s);
-  stream_get (pw->vpn_name, s, L2VPN_NAME_LEN);
-  pw->ac_port_ifindex = stream_getw (s);
   pw->queue_flags = 0;
 
   /*
@@ -2000,9 +1994,9 @@ zread_kpw (int command, struct zserv *client, u_short length,
     return -1;
   */
 
-  if (command == ZEBRA_KPW_ADD)
+  if (command == ZEBRA_PW_ADD)
     pw->cmd = PW_SET;
-  else if (command == ZEBRA_KPW_DELETE)
+  else if (command == ZEBRA_PW_DELETE)
     pw->cmd = PW_UNSET;
 
   pw_queue_add (pw);
@@ -2336,9 +2330,9 @@ zebra_client_read (struct thread *thread)
     case ZEBRA_RELEASE_LABEL_CHUNK:
       zread_label_manager_request (command, client, vrf_id);
       break;
-    case ZEBRA_KPW_ADD:
-    case ZEBRA_KPW_DELETE:
-      zread_kpw(command, client, length, vrf_id);
+    case ZEBRA_PW_ADD:
+    case ZEBRA_PW_DELETE:
+      zread_pseudowire (command, client, length, vrf_id);
       break;
     default:
       zlog_info ("Zebra received unknown command %d", command);

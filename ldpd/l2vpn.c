@@ -474,6 +474,30 @@ l2vpn_recv_pw_status_wcard(struct lde_nbr *ln, struct notify_msg *nm)
 	}
 }
 
+int
+l2vpn_pw_status_update(struct kpw *kpw)
+{
+	struct l2vpn		*l2vpn;
+	struct l2vpn_pw		*pw;
+
+	RB_FOREACH(l2vpn, l2vpn_head, &ldeconf->l2vpn_tree) {
+		pw = l2vpn_pw_find(l2vpn, kpw->ifname);
+		if (pw)
+			break;
+	}
+	if (!pw) {
+		log_warnx("%s: pseudowire %s not found", __func__, kpw->ifname);
+		return (1);
+	}
+
+	if (kpw->flags & F_PW_STATUS_UP)
+		pw->flags |= F_PW_STATUS_UP;
+	else
+		pw->flags &= ~F_PW_STATUS_UP;
+
+	return (0);
+}
+
 void
 l2vpn_pw_ctl(pid_t pid)
 {
@@ -599,41 +623,4 @@ ldpe_l2vpn_pw_exit(struct l2vpn_pw *pw)
 		tnbr->pw_count--;
 		tnbr_check(leconf, tnbr);
 	}
-}
-
-/**
- * Update PW status
- *
- * @return 0 on success, 1 on failure
- */
-int
-l2vpn_pw_status_update (struct kpw *kpw)
-{
-	struct l2vpn *l2vpn;
-	struct l2vpn_pw *pw;
-
-	/* Find L2VPN */
-	l2vpn = l2vpn_find(ldeconf, kpw->vpn_name);
-	if (!l2vpn) {
-		log_warn("%s: No L2VPN found for %s", __func__, kpw->vpn_name);
-		return 1;
-	}
-
-	/* Find PW */
-	pw = l2vpn_pw_find(l2vpn, kpw->ifname);
-	if (!pw) {
-		log_warn("%s: No PW found for VPN %s and interface %s",
-				 __func__, kpw->vpn_name, kpw->ifname);
-		return 1;
-	}
-
-	kpw->af = pw->af;
-	memcpy(&kpw->nexthop, &pw->addr, sizeof (union ldpd_addr));
-	/* Update status */
-	if (kpw->flags & F_PW_STATUS_UP)
-		pw->flags |= F_PW_STATUS_UP;
-	else
-		pw->flags &= ~F_PW_STATUS_UP;
-
-	return 0;
 }

@@ -40,6 +40,7 @@ static void	 ifp2kif(struct interface *, struct kif *);
 static void	 ifc2kaddr(struct interface *, struct connected *,
 		    struct kaddr *);
 static int	 zebra_send_mpls_labels(int, struct kroute *);
+static int	 zebra_send_kpw(int, struct kpw *);
 static int	 ldp_router_id_update(int, struct zclient *, zebra_size_t,
 		    vrf_id_t);
 static int	 ldp_interface_add(int, struct zclient *, zebra_size_t,
@@ -54,6 +55,8 @@ static int	 ldp_interface_address_delete(int, struct zclient *,
 		    zebra_size_t, vrf_id_t);
 static int	 ldp_zebra_read_route(int, struct zclient *, zebra_size_t,
 		    vrf_id_t);
+static int	 ldp_zebra_read_pw_status_update(int, struct zclient *,
+		    zebra_size_t, vrf_id_t);
 static void	 ldp_zebra_connected(struct zclient *);
 
 static struct zclient	*zclient;
@@ -154,42 +157,59 @@ kr_delete(struct kroute *kr)
 }
 
 static int
-zebra_send_kpw(u_char cmd, struct zclient *zclient, struct kpw *kpw)
+zebra_send_kpw(int cmd, struct kpw *kpw)
 {
 	struct stream		*s;
+	int			 type;
+	uint8_t			 flags = 0;
 
-	debug_zebra_out("ILM %s PW %u (%s) ifindex %hu, type %d. %s -> nexthop %s label %s",
-					(cmd == ZEBRA_KPW_ADD) ? "add" : "delete",
-					kpw->pwid, kpw->vpn_name, kpw->ifindex,
-					kpw->pw_type, log_label(kpw->local_label),
-					log_addr(kpw->af, &kpw->nexthop), log_label(kpw->remote_label));
+	debug_zebra_out("pseudowire %s ifindex %u nexthop %s labels %s/%s (%s)",
+	    kpw->ifname, kpw->ifindex, log_addr(kpw->af, &kpw->nexthop),
+	    log_label(kpw->local_label), log_label(kpw->remote_label),
+	    (cmd == ZEBRA_PW_ADD) ? "add" : "delete");
 
 	/* Reset stream. */
 	s = zclient->obuf;
 	stream_reset(s);
 
 	zclient_create_header(s, cmd, VRF_DEFAULT);
-	stream_write (s, kpw->ifname, IF_NAMESIZE);
-	stream_putw(s, kpw->ifindex);
-	stream_putl(s, kpw->pw_type);
-	stream_putl(s, kpw->lsr_id.s_addr);
+	stream_write(s, kpw->ifname, IF_NAMESIZE);
+	stream_putl(s, kpw->ifindex);
+
+	/* Put type */
+	switch (kpw->pw_type) {
+	case PW_TYPE_ETHERNET:
+		type = PSEUDOWIRE_TYPE_ETH;
+		break;
+	case PW_TYPE_ETHERNET_TAGGED:
+		type = PSEUDOWIRE_TYPE_ETH_TAGGED;
+		break;
+	default:
+		fatalx("zebra_send_kpw: unknown pseudowire type");
+	}
+	stream_putl(s, type);
+
+	/* Put nexthop */
 	stream_putl(s, kpw->af);
 	switch (kpw->af) {
 	case AF_INET:
 		stream_put_in_addr(s, &kpw->nexthop.v4);
 		break;
 	case AF_INET6:
-		stream_write (s, (u_char *)&kpw->nexthop.v6, 16);
+		stream_write(s, (u_char *)&kpw->nexthop.v6, 16);
 		break;
 	default:
 		fatalx("zebra_send_kpw: unknown af");
 	}
+
+	/* Put labels */
 	stream_putl(s, kpw->local_label);
 	stream_putl(s, kpw->remote_label);
-	stream_putc(s, kpw->flags);
-	stream_putl(s, kpw->pwid);
-	stream_write(s, kpw->vpn_name, L2VPN_NAME_LEN);
-	stream_putw(s, kpw->ac_port_ifindex);
+
+	/* Put flags */
+	if (kpw->flags & F_PW_CWORD)
+		flags |= F_PSEUDOWIRE_CWORD;
+	stream_putc(s, flags);
 
 	/* Put length at the first point of the stream. */
 	stream_putw_at(s, 0, stream_get_endp(s));
@@ -200,19 +220,13 @@ zebra_send_kpw(u_char cmd, struct zclient *zclient, struct kpw *kpw)
 int
 kmpw_set(struct kpw *kpw)
 {
-	zebra_send_kpw (ZEBRA_KPW_ADD, zclient, kpw);
-	/* TODO */
-
-	return (0);
+	return (zebra_send_kpw (ZEBRA_PW_ADD, kpw));
 }
 
 int
 kmpw_unset(struct kpw *kpw)
 {
-	zebra_send_kpw (ZEBRA_KPW_DELETE, zclient, kpw);
-	/* TODO */
-
-	return (0);
+	return (zebra_send_kpw (ZEBRA_PW_DELETE, kpw));
 }
 
 void
@@ -514,44 +528,36 @@ ldp_zebra_read_route(int command, struct zclient *zclient, zebra_size_t length,
 	return (0);
 }
 
-/**
+/*
  * Receive PW status update from Zebra and send it to LDE process.
- *
- * Params and return type are the ones required by zclient interface.
- *
- * @param command It will always be ZEBRA_PW_STATUS_UPDATE
- * @param zclient To get input stream from
- * @param length
- * @param vrf_id
- * @return 0 on success
  */
 static int
-ldp_zebra_read_pw_status_update (int command, struct zclient *zclient,
-		zebra_size_t length, vrf_id_t vrf_id)
+ldp_zebra_read_pw_status_update(int command, struct zclient *zclient,
+    zebra_size_t length, vrf_id_t vrf_id)
 {
 	struct stream		*s;
-	uint8_t status;
-	struct kpw kpw;
+	uint8_t			 status;
+	struct kpw		 kpw;
 
-	memset (&kpw, 0, sizeof (struct kpw));
-
-	/* Get input stream.  */
+	memset(&kpw, 0, sizeof(struct kpw));
 	s = zclient->ibuf;
 
 	/* Get data. */
-	stream_get (kpw.ifname, s, IF_NAMESIZE);
-	/* ifindex = stream_getw (s); */
-	/* pwid = stream_getl (s); */
-	stream_get (kpw.vpn_name, s, L2VPN_NAME_LEN);
-	status = stream_getc (s);
-	if (status)
+	stream_get(kpw.ifname, s, IF_NAMESIZE);
+	kpw.ifindex = stream_getl(s);
+
+	status = stream_getc(s);
+	if (status == PSEUDOWIRE_STATUS_UP)
 		kpw.flags |= F_PW_STATUS_UP;
 	else
 		kpw.flags &= ~F_PW_STATUS_UP;
 
-	main_imsg_compose_lde (IMSG_PW_UPDATE, 0, &kpw, sizeof (kpw));
+	debug_zebra_in("pseudowire %s ifindex %u status %s", kpw.ifname,
+	    kpw.ifindex, (kpw.flags & F_PW_STATUS_UP) ? "up" : "down");
 
-	return 0;
+	main_imsg_compose_lde(IMSG_PW_UPDATE, 0, &kpw, sizeof(kpw));
+
+	return (0);
 }
 
 static void

@@ -175,8 +175,8 @@ extern int zsend_interface_vrf_update (struct zserv *, struct interface *,
                                        vrf_id_t);
 
 extern int zsend_interface_link_params (struct zserv *, struct interface *);
-extern int zsend_pw_update (int cmd, struct zserv *client, struct zebra_pw_t *pw,
-                 u_short status, vrf_id_t vrf_id);
+extern int zsend_pw_update (int cmd, struct zserv *, struct zebra_pw_t *,
+			    u_short, vrf_id_t);
 
 extern pid_t pid;
 
