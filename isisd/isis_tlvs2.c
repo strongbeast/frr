@@ -317,7 +317,7 @@ static int pack_item_oldstyle_reach(struct isis_item *i,
 	stream_putc(s, 0x80); /* delay metric - unsupported */
 	stream_putc(s, 0x80); /* expense metric - unsupported */
 	stream_putc(s, 0x80); /* error metric - unsupported */
-	stream_put(s, r->id, sizeof(r->id));
+	stream_put(s, r->id, 7);
 
 	return 0;
 }
@@ -338,7 +338,7 @@ static int unpack_item_oldstyle_reach(uint16_t mtid,
 		return 1;
 	}
 
-	struct isis_oldstyle_reach *rv = XMALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+	struct isis_oldstyle_reach *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
 	rv->metric = stream_getc(s);
 	if ((rv->metric & 0x3f) != rv->metric) {
 		sbuf_push(log, indent, "Metric has unplausible format\n");
@@ -414,7 +414,7 @@ static int unpack_item_lsp_entry(uint16_t mtid,
 		return 1;
 	}
 
-	struct isis_lsp_entry *rv = XMALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+	struct isis_lsp_entry *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
 	rv->rem_lifetime = stream_getw(s);
 	stream_get(rv->id, s, 8);
 	rv->seqno = stream_getl(s);
@@ -554,7 +554,7 @@ static void copy_tlv_protocols_supported(struct isis_protocols_supported *src,
 	if (!src->protocols || !src->count)
 		return;
 	dest->count = src->count;
-	dest->protocols = XMALLOC(MTYPE_ISIS_TLV2, src->count);
+	dest->protocols = XCALLOC(MTYPE_ISIS_TLV2, src->count);
 	memcpy(dest->protocols, src->protocols, src->count);
 }
 
@@ -612,7 +612,7 @@ static int unpack_tlv_protocols_supported(enum isis_tlv_context context,
 	}
 
 	tlvs->protocols_supported.count = tlv_len;
-	tlvs->protocols_supported.protocols = XMALLOC(MTYPE_ISIS_TLV2, tlv_len);
+	tlvs->protocols_supported.protocols = XCALLOC(MTYPE_ISIS_TLV2, tlv_len);
 	stream_get(tlvs->protocols_supported.protocols, s, tlv_len);
 
 	format_tlv_protocols_supported(&tlvs->protocols_supported, log, indent + 2);
@@ -860,7 +860,7 @@ static int unpack_tlv_dynamic_hostname(enum isis_tlv_context context,
 		return 0;
 	}
 
-	tlvs->hostname = XMALLOC(MTYPE_ISIS_TLV2, tlv_len + 1);
+	tlvs->hostname = XCALLOC(MTYPE_ISIS_TLV2, tlv_len + 1);
 	stream_get(tlvs->hostname, s, tlv_len);
 	tlvs->hostname[tlv_len] = '\0';
 
@@ -1288,7 +1288,7 @@ struct isis_item_list *isis_get_mt_items(struct isis_mt_item_list *m, uint16_t m
 
 	rv = isis_lookup_mt_items(m, mtid);
 	if (!rv) {
-		rv = XMALLOC(MTYPE_ISIS_MT_ITEM_LIST, sizeof(*rv));
+		rv = XCALLOC(MTYPE_ISIS_MT_ITEM_LIST, sizeof(*rv));
 		init_item_list(rv);
 		rv->mtid = mtid;
 		RB_INSERT(isis_mt_item_list, m, rv);
