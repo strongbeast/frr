@@ -21,6 +21,15 @@ struct isis_oldstyle_reach {
 	uint8_t metric;
 };
 
+struct isis_lsp_entry {
+	struct isis_lsp_entry *next;
+
+	uint16_t rem_lifetime;
+	uint8_t id[8];
+	uint16_t checksum;
+	uint32_t seqno;
+};
+
 struct isis_extended_reach;
 struct isis_extended_reach {
 	struct isis_extended_reach *next;
@@ -78,6 +87,7 @@ struct isis_item_list *isis_lookup_mt_items(struct isis_mt_item_list *m, uint16_
 struct isis_tlvs {
 	struct isis_item_list area_addresses;
 	struct isis_item_list oldstyle_reach;
+	struct isis_item_list lsp_entries;
 	struct isis_item_list extended_reach;
 	struct isis_mt_item_list mt_reach;
 	struct isis_protocols_supported protocols_supported;
@@ -105,6 +115,7 @@ enum isis_tlv_type {
 	ISIS_TLV_AREA_ADDRESSES = 1,
 	ISIS_TLV_OLDSTYLE_REACH = 2,
 	ISIS_TLV_PADDING = 8,
+	ISIS_TLV_LSP_ENTRY = 9,
 	ISIS_TLV_EXTENDED_REACH = 22,
 
 	ISIS_TLV_PROTOCOLS_SUPPORTED = 129,

@@ -352,6 +352,79 @@ static int unpack_item_oldstyle_reach(uint16_t mtid,
 	return 0;
 }
 
+/* Functions related to TLV 9 LSP Entry */
+static struct isis_item *copy_item_lsp_entry(struct isis_item *i)
+{
+	struct isis_lsp_entry *e = (struct isis_lsp_entry*)i;
+	struct isis_lsp_entry *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+
+	rv->rem_lifetime = e->rem_lifetime;
+	memcpy(rv->id, e->id, sizeof(rv->id));
+	rv->seqno = e->seqno;
+	rv->checksum = e->checksum;
+
+	return (struct isis_item*)rv;
+}
+
+static void format_item_lsp_entry(uint16_t mtid, struct isis_item *i,
+                                  struct sbuf *buf, int indent)
+{
+	struct isis_lsp_entry *e = (struct isis_lsp_entry*)i;
+
+	sbuf_push(buf, indent, "LSP Entry:\n");
+	sbuf_push(buf, indent, "  LSP-ID: %s\n", isis_format_id(e->id, 8));
+	sbuf_push(buf, indent, "  Sequence-Number: 0x%" PRIx32 "\n", e->seqno);
+	sbuf_push(buf, indent, "  Checksum: 0x%" PRIx16 "\n", e->checksum);
+	sbuf_push(buf, indent, "  Remaining Lifetime: %"PRIu16"\n", e->rem_lifetime);
+}
+
+static void free_item_lsp_entry(struct isis_item *i)
+{
+	XFREE(MTYPE_ISIS_TLV2, i);
+}
+
+static int pack_item_lsp_entry(struct isis_item *i, struct stream *s)
+{
+	struct isis_lsp_entry *e = (struct isis_lsp_entry*)i;
+
+	if (STREAM_WRITEABLE(s) < 16)
+		return 1;
+
+	stream_putw(s, e->rem_lifetime);
+	stream_put(s, e->id, 8);
+	stream_putl(s, e->seqno);
+	stream_putw(s, e->checksum);
+
+	return 0;
+}
+
+static int unpack_item_lsp_entry(uint16_t mtid,
+                                 uint8_t len,
+                                 struct stream *s,
+                                 struct sbuf *log,
+                                 void *dest,
+                                 int indent)
+{
+	struct isis_tlvs *tlvs = dest;
+
+	sbuf_push(log, indent, "Unpack LSP entry...\n");
+	if (len < 16) {
+		sbuf_push(log, indent, "Not enough data left. (Expected 16 bytes of LSP info, got %"
+                          PRIu8, len);
+		return 1;
+	}
+
+	struct isis_lsp_entry *rv = XMALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+	rv->rem_lifetime = stream_getw(s);
+	stream_get(rv->id, s, 8);
+	rv->seqno = stream_getl(s);
+	rv->checksum = stream_getw(s);
+
+	format_item_lsp_entry(mtid, (struct isis_item*)rv, log, indent + 2);
+	append_item(&tlvs->lsp_entries, (struct isis_item*)rv);
+	return 0;
+}
+
 /* Functions related to TLVs 22/222 Extended Reach/MT Reach */
 
 static struct isis_item *copy_item_extended_reach(struct isis_item *i)
@@ -1293,6 +1366,7 @@ struct isis_tlvs *isis_alloc_tlvs(void)
 
 	init_item_list(&result->area_addresses);
 	init_item_list(&result->oldstyle_reach);
+	init_item_list(&result->lsp_entries);
 	init_item_list(&result->extended_reach);
 	RB_INIT(&result->mt_reach);
 	init_item_list(&result->extended_ip_reach);
@@ -1312,6 +1386,9 @@ struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
 
 	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_OLDSTYLE_REACH,
 	           &tlvs->oldstyle_reach, &rv->oldstyle_reach);
+
+	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_LSP_ENTRY,
+	           &tlvs->lsp_entries, &rv->lsp_entries);
 
 	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
 	           &tlvs->extended_reach, &rv->extended_reach);
@@ -1348,6 +1425,9 @@ static void format_tlvs(struct isis_tlvs *tlvs, struct sbuf *buf, int indent)
 
 	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_OLDSTYLE_REACH,
 	             &tlvs->oldstyle_reach, buf, indent);
+
+	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_LSP_ENTRY,
+	             &tlvs->lsp_entries, buf, indent);
 
 	format_tlv_dynamic_hostname(tlvs->hostname, buf, indent);
 
@@ -1391,6 +1471,8 @@ void isis_free_tlvs(struct isis_tlvs *tlvs)
 	           &tlvs->area_addresses);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_OLDSTYLE_REACH,
 	           &tlvs->oldstyle_reach);
+	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_LSP_ENTRY,
+	           &tlvs->lsp_entries);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
 		   &tlvs->extended_reach);
 	free_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_REACH,
@@ -1428,6 +1510,11 @@ int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream)
 
 	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_OLDSTYLE_REACH,
 	                &tlvs->oldstyle_reach, stream);
+	if (rv)
+		return rv;
+
+	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_LSP_ENTRY,
+	                &tlvs->lsp_entries, stream);
 	if (rv)
 		return rv;
 
@@ -1598,6 +1685,7 @@ int isis_unpack_tlvs(size_t avail_len,
 
 ITEM_TLV_OPS(area_address, "TLV 1 Area Addresses");
 ITEM_TLV_OPS(oldstyle_reach, "TLV 2 IS Reachability");
+ITEM_TLV_OPS(lsp_entry, "TLV 9 LSP Entries");
 ITEM_TLV_OPS(extended_reach, "TLV 22 Extended Reachability");
 TLV_OPS(protocols_supported, "TLV 129 Protocols Supported");
 ITEM_TLV_OPS(extended_ip_reach, "TLV 135 Extended IP Reachability");
@@ -1610,6 +1698,7 @@ static const struct tlv_ops *tlv_table[ISIS_CONTEXT_MAX][ISIS_TLV_MAX] = {
 	[ISIS_CONTEXT_LSP] = {
 		[ISIS_TLV_AREA_ADDRESSES] = &tlv_area_address_ops,
 		[ISIS_TLV_OLDSTYLE_REACH] = &tlv_oldstyle_reach_ops,
+		[ISIS_TLV_LSP_ENTRY] = &tlv_lsp_entry_ops,
 		[ISIS_TLV_EXTENDED_REACH] = &tlv_extended_reach_ops,
 		[ISIS_TLV_MT_REACH] = &tlv_extended_reach_ops,
 		[ISIS_TLV_PROTOCOLS_SUPPORTED] = &tlv_protocols_supported_ops,
