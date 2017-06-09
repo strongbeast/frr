@@ -14,13 +14,23 @@ struct isis_area_address {
 	uint8_t len;
 };
 
+struct isis_oldstyle_reach;
 struct isis_oldstyle_reach {
-	struct isis_oldtyle_reach *next;
+	struct isis_oldstyle_reach *next;
 
 	uint8_t id[7];
 	uint8_t metric;
 };
 
+struct isis_oldstyle_ip_reach;
+struct isis_oldstyle_ip_reach {
+	struct isis_oldstyle_ip_reach *next;
+
+	uint8_t metric;
+	struct prefix_ipv4 prefix;
+};
+
+struct isis_lsp_entry;
 struct isis_lsp_entry {
 	struct isis_lsp_entry *next;
 
@@ -105,7 +115,9 @@ struct isis_tlvs {
 	struct isis_item_list lsp_entries;
 	struct isis_item_list extended_reach;
 	struct isis_mt_item_list mt_reach;
+	struct isis_item_list oldstyle_ip_reach;
 	struct isis_protocols_supported protocols_supported;
+	struct isis_item_list oldstyle_ip_reach_ext;
 	struct isis_item_list ipv4_address;
 	struct isis_item_list extended_ip_reach;
 	struct isis_mt_item_list mt_ip_reach;
@@ -129,8 +141,6 @@ enum isis_tlv_context {
 
 /* TODO: 10 Auth
          12 Checksum
-        128 IPv4 Int Reach
-        130 IPv4 Ext Reach
         134 TE Router ID
         232 IPv6 Addr
         242 MT Router Info
@@ -145,7 +155,9 @@ enum isis_tlv_type {
 	ISIS_TLV_LSP_ENTRY = 9,
 	ISIS_TLV_EXTENDED_REACH = 22,
 
+	ISIS_TLV_OLDSTYLE_IP_REACH = 128,
 	ISIS_TLV_PROTOCOLS_SUPPORTED = 129,
+	ISIS_TLV_OLDSTYLE_IP_REACH_EXT = 130,
 	ISIS_TLV_IPV4_ADDRESS = 132,
 	ISIS_TLV_EXTENDED_IP_REACH = 135,
 	ISIS_TLV_DYNAMIC_HOSTNAME = 137,
