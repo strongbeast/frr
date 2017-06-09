@@ -101,6 +101,15 @@ struct isis_ipv6_address {
 	struct in6_addr addr;
 };
 
+struct isis_mt_router_info;
+struct isis_mt_router_info {
+	struct isis_mt_router_info *next;
+
+	bool overload;
+	bool attached;
+	uint16_t mtid;
+};
+
 struct isis_item_list;
 struct isis_item_list {
 	struct isis_item *head;
@@ -127,6 +136,7 @@ struct isis_tlvs {
 	struct isis_item_list oldstyle_ip_reach_ext;
 	struct isis_item_list ipv4_address;
 	struct isis_item_list ipv6_address;
+	struct isis_item_list mt_router_info;
 	struct isis_item_list extended_ip_reach;
 	struct isis_mt_item_list mt_ip_reach;
 	char *hostname;
@@ -150,7 +160,6 @@ enum isis_tlv_context {
 /* TODO: 10 Auth
          12 Checksum
         134 TE Router ID
-        242 MT Router Info
 */
 
 
@@ -169,6 +178,7 @@ enum isis_tlv_type {
 	ISIS_TLV_EXTENDED_IP_REACH = 135,
 	ISIS_TLV_DYNAMIC_HOSTNAME = 137,
 	ISIS_TLV_MT_REACH = 222,
+	ISIS_TLV_MT_ROUTER_INFO = 229,
 	ISIS_TLV_IPV6_ADDRESS = 232,
 	ISIS_TLV_MT_IP_REACH = 235,
 	ISIS_TLV_IPV6_REACH = 236,
@@ -200,5 +210,11 @@ struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs);
 #define ISIS_IPV6_REACH_DOWN 0x80
 #define ISIS_IPV6_REACH_EXTERNAL 0x40
 #define ISIS_IPV6_REACH_SUBTLV 0x20
+
+#ifndef ISIS_MT_MASK
+#define ISIS_MT_MASK           0x0fff
+#define ISIS_MT_OL_MASK        0x8000
+#define ISIS_MT_AT_MASK        0x4000
+#endif
 
 #endif

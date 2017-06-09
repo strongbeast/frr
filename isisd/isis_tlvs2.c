@@ -888,6 +888,83 @@ static int unpack_item_ipv6_address(uint16_t mtid,
 }
 
 
+/* Functions related to TLV 229 MT Router information */
+static struct isis_item *copy_item_mt_router_info(struct isis_item *i)
+{
+	struct isis_mt_router_info *info = (struct isis_mt_router_info*)i;
+	struct isis_mt_router_info *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+
+	rv->overload = info->overload;
+	rv->attached = info->attached;
+	rv->mtid = info->mtid;
+	return (struct isis_item*)rv;
+}
+
+static void format_item_mt_router_info(uint16_t mtid, struct isis_item *i,
+                                       struct sbuf *buf, int indent)
+{
+	struct isis_mt_router_info *info = (struct isis_mt_router_info*)i;
+
+	sbuf_push(buf, indent, "MT Router Info:\n");
+	sbuf_push(buf, indent, "  Topology: %s\n", isis_mtid2str(info->mtid));
+	sbuf_push(buf, indent, "  Overload: %s\n", info->overload ? "Yes" : "No");
+	sbuf_push(buf, indent, "  Attached: %s\n", info->attached ? "Yes" : "No");
+}
+
+static void free_item_mt_router_info(struct isis_item *i)
+{
+	XFREE(MTYPE_ISIS_TLV2, i);
+}
+
+static int pack_item_mt_router_info(struct isis_item *i,
+                                    struct stream *s)
+{
+	struct isis_mt_router_info *info = (struct isis_mt_router_info*)i;
+
+	if (STREAM_WRITEABLE(s) < 2)
+		return 1;
+
+	uint16_t entry = info->mtid;
+
+	if (info->overload)
+		entry |= ISIS_MT_OL_MASK;
+	if (info->attached)
+		entry |= ISIS_MT_AT_MASK;
+
+	stream_putw(s, entry);
+
+	return 0;
+}
+
+static int unpack_item_mt_router_info(uint16_t mtid,
+                                      uint8_t len,
+                                      struct stream *s,
+                                      struct sbuf *log,
+                                      void *dest,
+                                      int indent)
+{
+	struct isis_tlvs *tlvs = dest;
+
+	sbuf_push(log, indent, "Unpack MT Router info...\n");
+	if (len < 2) {
+		sbuf_push(log, indent, "Not enough data left.(Expected 2 bytes of MT info, got %"
+		          PRIu8 ")\n", len);
+		return 1;
+	}
+
+	struct isis_mt_router_info *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+
+	uint16_t entry = stream_getw(s);
+	rv->overload = entry & ISIS_MT_OL_MASK;
+	rv->attached = entry & ISIS_MT_AT_MASK;
+	rv->mtid = entry & ISIS_MT_MASK;
+
+	format_item_mt_router_info(mtid, (struct isis_item*)rv, log, indent + 2);
+	append_item(&tlvs->mt_router_info, (struct isis_item*)rv);
+	return 0;
+}
+
+
 /* Functions related to TLVs 135/235 extended IP reach/MT IP Reach */
 
 static struct isis_item *copy_item_extended_ip_reach(struct isis_item *i)
@@ -1641,6 +1718,7 @@ struct isis_tlvs *isis_alloc_tlvs(void)
 	result = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*result));
 
 	init_item_list(&result->area_addresses);
+	init_item_list(&result->mt_router_info);
 	init_item_list(&result->oldstyle_reach);
 	init_item_list(&result->lan_neighbor);
 	init_item_list(&result->lsp_entries);
@@ -1664,6 +1742,9 @@ struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
 
 	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_AREA_ADDRESSES,
 	           &tlvs->area_addresses, &rv->area_addresses);
+
+	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_ROUTER_INFO,
+	           &tlvs->mt_router_info, &rv->mt_router_info);
 
 	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_OLDSTYLE_REACH,
 	           &tlvs->oldstyle_reach, &rv->oldstyle_reach);
@@ -1718,6 +1799,9 @@ static void format_tlvs(struct isis_tlvs *tlvs, struct sbuf *buf, int indent)
 
 	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_AREA_ADDRESSES,
 	             &tlvs->area_addresses, buf, indent);
+
+	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_ROUTER_INFO,
+	             &tlvs->mt_router_info, buf, indent);
 
 	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_OLDSTYLE_REACH,
 	             &tlvs->oldstyle_reach, buf, indent);
@@ -1780,6 +1864,8 @@ void isis_free_tlvs(struct isis_tlvs *tlvs)
 
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_AREA_ADDRESSES,
 	           &tlvs->area_addresses);
+	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_ROUTER_INFO,
+	           &tlvs->mt_router_info);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_OLDSTYLE_REACH,
 	           &tlvs->oldstyle_reach);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_LAN_NEIGHBORS,
@@ -1822,6 +1908,11 @@ int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream)
 
 	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_AREA_ADDRESSES,
 	                &tlvs->area_addresses, stream);
+	if (rv)
+		return rv;
+
+	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_ROUTER_INFO,
+	                &tlvs->mt_router_info, stream);
 	if (rv)
 		return rv;
 
@@ -2039,6 +2130,7 @@ TLV_OPS(protocols_supported, "TLV 129 Protocols Supported");
 ITEM_TLV_OPS(ipv4_address, "TLV 132 IPv4 Interface Address");
 ITEM_TLV_OPS(extended_ip_reach, "TLV 135 Extended IP Reachability");
 TLV_OPS(dynamic_hostname, "TLV 137 Dynamic Hostname");
+ITEM_TLV_OPS(mt_router_info, "TLV 229 MT Router Information");
 ITEM_TLV_OPS(ipv6_address, "TLV 232 IPv6 Interface Address");
 ITEM_TLV_OPS(ipv6_reach, "TLV 236 IPv6 Reachability");
 
@@ -2059,6 +2151,7 @@ static const struct tlv_ops *tlv_table[ISIS_CONTEXT_MAX][ISIS_TLV_MAX] = {
 		[ISIS_TLV_EXTENDED_IP_REACH] = &tlv_extended_ip_reach_ops,
 		[ISIS_TLV_MT_IP_REACH] = &tlv_extended_ip_reach_ops,
 		[ISIS_TLV_DYNAMIC_HOSTNAME] = &tlv_dynamic_hostname_ops,
+		[ISIS_TLV_MT_ROUTER_INFO] = &tlv_mt_router_info_ops,
 		[ISIS_TLV_IPV6_ADDRESS] = &tlv_ipv6_address_ops,
 		[ISIS_TLV_IPV6_REACH] = &tlv_ipv6_reach_ops,
 		[ISIS_TLV_MT_IPV6_REACH] = &tlv_ipv6_reach_ops,
