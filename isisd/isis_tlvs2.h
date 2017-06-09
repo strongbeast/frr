@@ -77,6 +77,13 @@ struct isis_lan_neighbor {
 	uint8_t mac[6];
 };
 
+struct isis_ipv4_address;
+struct isis_ipv4_address {
+	struct isis_ipv4_address *next;
+
+	struct in_addr addr;
+};
+
 struct isis_item_list;
 struct isis_item_list {
 	struct isis_item *head;
@@ -99,6 +106,7 @@ struct isis_tlvs {
 	struct isis_item_list extended_reach;
 	struct isis_mt_item_list mt_reach;
 	struct isis_protocols_supported protocols_supported;
+	struct isis_item_list ipv4_address;
 	struct isis_item_list extended_ip_reach;
 	struct isis_mt_item_list mt_ip_reach;
 	char *hostname;
@@ -119,6 +127,16 @@ enum isis_tlv_context {
 	ISIS_CONTEXT_MAX
 };
 
+/* TODO: 10 Auth
+         12 Checksum
+        128 IPv4 Int Reach
+        130 IPv4 Ext Reach
+        134 TE Router ID
+        232 IPv6 Addr
+        242 MT Router Info
+*/
+
+
 enum isis_tlv_type {
 	ISIS_TLV_AREA_ADDRESSES = 1,
 	ISIS_TLV_OLDSTYLE_REACH = 2,
@@ -128,6 +146,7 @@ enum isis_tlv_type {
 	ISIS_TLV_EXTENDED_REACH = 22,
 
 	ISIS_TLV_PROTOCOLS_SUPPORTED = 129,
+	ISIS_TLV_IPV4_ADDRESS = 132,
 	ISIS_TLV_EXTENDED_IP_REACH = 135,
 	ISIS_TLV_DYNAMIC_HOSTNAME = 137,
 	ISIS_TLV_MT_REACH = 222,
