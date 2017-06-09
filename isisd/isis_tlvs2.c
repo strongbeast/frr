@@ -352,6 +352,66 @@ static int unpack_item_oldstyle_reach(uint16_t mtid,
 	return 0;
 }
 
+/* Functions related to TLV 6 LAN Neighbors */
+static struct isis_item *copy_item_lan_neighbor(struct isis_item *i)
+{
+	struct isis_lan_neighbor *n = (struct isis_lan_neighbor*)i;
+	struct isis_lan_neighbor *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+
+	memcpy(rv->mac, n->mac, 6);
+	return (struct isis_item*)rv;
+}
+
+static void format_item_lan_neighbor(uint16_t mtid, struct isis_item *i,
+                                     struct sbuf *buf, int indent)
+{
+	struct isis_lan_neighbor *n = (struct isis_lan_neighbor*)i;
+
+	sbuf_push(buf, indent, "LAN Neighbor: %s\n", isis_format_id(n->mac, 6));
+}
+
+static void free_item_lan_neighbor(struct isis_item *i)
+{
+	XFREE(MTYPE_ISIS_TLV2, i);
+}
+
+static int pack_item_lan_neighbor(struct isis_item *i,
+                                  struct stream *s)
+{
+	struct isis_lan_neighbor *n = (struct isis_lan_neighbor*)i;
+
+	if (STREAM_WRITEABLE(s) < 6)
+		return 1;
+
+	stream_put(s, n->mac, 6);
+
+	return 0;
+}
+
+static int unpack_item_lan_neighbor(uint16_t mtid,
+                                    uint8_t len,
+                                    struct stream *s,
+                                    struct sbuf *log,
+                                    void *dest,
+                                    int indent)
+{
+	struct isis_tlvs *tlvs = dest;
+
+	sbuf_push(log, indent, "Unpack LAN neighbor...\n");
+	if (len < 6) {
+		sbuf_push(log, indent, "Not enough data left.(Expected 6 bytes of mac, got %"
+		          PRIu8 ")\n", len);
+		return 1;
+	}
+
+	struct isis_lan_neighbor *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+	stream_get(rv->mac, s, 6);
+
+	format_item_lan_neighbor(mtid, (struct isis_item*)rv, log, indent + 2);
+	append_item(&tlvs->lan_neighbor, (struct isis_item*)rv);
+	return 0;
+}
+
 /* Functions related to TLV 9 LSP Entry */
 static struct isis_item *copy_item_lsp_entry(struct isis_item *i)
 {
@@ -1366,6 +1426,7 @@ struct isis_tlvs *isis_alloc_tlvs(void)
 
 	init_item_list(&result->area_addresses);
 	init_item_list(&result->oldstyle_reach);
+	init_item_list(&result->lan_neighbor);
 	init_item_list(&result->lsp_entries);
 	init_item_list(&result->extended_reach);
 	RB_INIT(&result->mt_reach);
@@ -1386,6 +1447,9 @@ struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
 
 	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_OLDSTYLE_REACH,
 	           &tlvs->oldstyle_reach, &rv->oldstyle_reach);
+
+	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_LAN_NEIGHBORS,
+	           &tlvs->lan_neighbor, &rv->lan_neighbor);
 
 	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_LSP_ENTRY,
 	           &tlvs->lsp_entries, &rv->lsp_entries);
@@ -1425,6 +1489,9 @@ static void format_tlvs(struct isis_tlvs *tlvs, struct sbuf *buf, int indent)
 
 	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_OLDSTYLE_REACH,
 	             &tlvs->oldstyle_reach, buf, indent);
+
+	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_LAN_NEIGHBORS,
+	             &tlvs->lan_neighbor, buf, indent);
 
 	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_LSP_ENTRY,
 	             &tlvs->lsp_entries, buf, indent);
@@ -1471,6 +1538,8 @@ void isis_free_tlvs(struct isis_tlvs *tlvs)
 	           &tlvs->area_addresses);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_OLDSTYLE_REACH,
 	           &tlvs->oldstyle_reach);
+	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_LAN_NEIGHBORS,
+	           &tlvs->lan_neighbor);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_LSP_ENTRY,
 	           &tlvs->lsp_entries);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
@@ -1510,6 +1579,11 @@ int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream)
 
 	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_OLDSTYLE_REACH,
 	                &tlvs->oldstyle_reach, stream);
+	if (rv)
+		return rv;
+
+	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_LAN_NEIGHBORS,
+	                &tlvs->lan_neighbor, stream);
 	if (rv)
 		return rv;
 
@@ -1685,6 +1759,7 @@ int isis_unpack_tlvs(size_t avail_len,
 
 ITEM_TLV_OPS(area_address, "TLV 1 Area Addresses");
 ITEM_TLV_OPS(oldstyle_reach, "TLV 2 IS Reachability");
+ITEM_TLV_OPS(lan_neighbor, "TLV 6 LAN Neighbors");
 ITEM_TLV_OPS(lsp_entry, "TLV 9 LSP Entries");
 ITEM_TLV_OPS(extended_reach, "TLV 22 Extended Reachability");
 TLV_OPS(protocols_supported, "TLV 129 Protocols Supported");
@@ -1698,6 +1773,7 @@ static const struct tlv_ops *tlv_table[ISIS_CONTEXT_MAX][ISIS_TLV_MAX] = {
 	[ISIS_CONTEXT_LSP] = {
 		[ISIS_TLV_AREA_ADDRESSES] = &tlv_area_address_ops,
 		[ISIS_TLV_OLDSTYLE_REACH] = &tlv_oldstyle_reach_ops,
+		[ISIS_TLV_LAN_NEIGHBORS] = &tlv_lan_neighbor_ops,
 		[ISIS_TLV_LSP_ENTRY] = &tlv_lsp_entry_ops,
 		[ISIS_TLV_EXTENDED_REACH] = &tlv_extended_reach_ops,
 		[ISIS_TLV_MT_REACH] = &tlv_extended_reach_ops,

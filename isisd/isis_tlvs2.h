@@ -70,6 +70,13 @@ struct isis_item {
 	struct isis_item *next;
 };
 
+struct isis_lan_neighbor;
+struct isis_lan_neighbor {
+	struct isis_lan_neighbor *next;
+
+	uint8_t mac[6];
+};
+
 struct isis_item_list;
 struct isis_item_list {
 	struct isis_item *head;
@@ -87,6 +94,7 @@ struct isis_item_list *isis_lookup_mt_items(struct isis_mt_item_list *m, uint16_
 struct isis_tlvs {
 	struct isis_item_list area_addresses;
 	struct isis_item_list oldstyle_reach;
+	struct isis_item_list lan_neighbor;
 	struct isis_item_list lsp_entries;
 	struct isis_item_list extended_reach;
 	struct isis_mt_item_list mt_reach;
@@ -114,6 +122,7 @@ enum isis_tlv_context {
 enum isis_tlv_type {
 	ISIS_TLV_AREA_ADDRESSES = 1,
 	ISIS_TLV_OLDSTYLE_REACH = 2,
+	ISIS_TLV_LAN_NEIGHBORS = 6,
 	ISIS_TLV_PADDING = 8,
 	ISIS_TLV_LSP_ENTRY = 9,
 	ISIS_TLV_EXTENDED_REACH = 22,
