@@ -825,6 +825,69 @@ static int unpack_item_ipv4_address(uint16_t mtid,
 }
 
 
+/* Functions related to TLV 232 IPv6 Interface addresses */
+static struct isis_item *copy_item_ipv6_address(struct isis_item *i)
+{
+	struct isis_ipv6_address *a = (struct isis_ipv6_address*)i;
+	struct isis_ipv6_address *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+
+	rv->addr = a->addr;
+	return (struct isis_item*)rv;
+}
+
+static void format_item_ipv6_address(uint16_t mtid, struct isis_item *i,
+                                     struct sbuf *buf, int indent)
+{
+	struct isis_ipv6_address *a = (struct isis_ipv6_address*)i;
+	char addrbuf[INET6_ADDRSTRLEN];
+
+	inet_ntop(AF_INET6, &a->addr, addrbuf, sizeof(addrbuf));
+	sbuf_push(buf, indent, "IPv6 Interface Address: %s\n", addrbuf);
+}
+
+static void free_item_ipv6_address(struct isis_item *i)
+{
+	XFREE(MTYPE_ISIS_TLV2, i);
+}
+
+static int pack_item_ipv6_address(struct isis_item *i,
+                                  struct stream *s)
+{
+	struct isis_ipv6_address *a = (struct isis_ipv6_address*)i;
+
+	if (STREAM_WRITEABLE(s) < 16)
+		return 1;
+
+	stream_put(s, &a->addr, 16);
+
+	return 0;
+}
+
+static int unpack_item_ipv6_address(uint16_t mtid,
+                                    uint8_t len,
+                                    struct stream *s,
+                                    struct sbuf *log,
+                                    void *dest,
+                                    int indent)
+{
+	struct isis_tlvs *tlvs = dest;
+
+	sbuf_push(log, indent, "Unpack IPv6 Interface address...\n");
+	if (len < 16) {
+		sbuf_push(log, indent, "Not enough data left.(Expected 16 bytes of IPv6 address, got %"
+		          PRIu8 ")\n", len);
+		return 1;
+	}
+
+	struct isis_ipv6_address *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+	stream_get(&rv->addr, s, 16);
+
+	format_item_ipv6_address(mtid, (struct isis_item*)rv, log, indent + 2);
+	append_item(&tlvs->ipv6_address, (struct isis_item*)rv);
+	return 0;
+}
+
+
 /* Functions related to TLVs 135/235 extended IP reach/MT IP Reach */
 
 static struct isis_item *copy_item_extended_ip_reach(struct isis_item *i)
@@ -1586,6 +1649,7 @@ struct isis_tlvs *isis_alloc_tlvs(void)
 	init_item_list(&result->oldstyle_ip_reach);
 	init_item_list(&result->oldstyle_ip_reach_ext);
 	init_item_list(&result->ipv4_address);
+	init_item_list(&result->ipv6_address);
 	init_item_list(&result->extended_ip_reach);
 	RB_INIT(&result->mt_ip_reach);
 	init_item_list(&result->ipv6_reach);
@@ -1627,6 +1691,9 @@ struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
 
 	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV4_ADDRESS,
 	           &tlvs->ipv4_address, &rv->ipv4_address);
+
+	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_ADDRESS,
+	           &tlvs->ipv6_address, &rv->ipv6_address);
 
 	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
 	           &tlvs->extended_ip_reach, &rv->extended_ip_reach);
@@ -1678,6 +1745,9 @@ static void format_tlvs(struct isis_tlvs *tlvs, struct sbuf *buf, int indent)
 	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV4_ADDRESS,
 	             &tlvs->ipv4_address, buf, indent);
 
+	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_ADDRESS,
+	             &tlvs->ipv6_address, buf, indent);
+
 	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
 	             &tlvs->extended_ip_reach, buf, indent);
 
@@ -1727,6 +1797,8 @@ void isis_free_tlvs(struct isis_tlvs *tlvs)
 	           &tlvs->oldstyle_ip_reach_ext);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV4_ADDRESS,
 	           &tlvs->ipv4_address);
+	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_ADDRESS,
+	           &tlvs->ipv6_address);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
 		   &tlvs->extended_ip_reach);
 	free_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IP_REACH,
@@ -1794,6 +1866,11 @@ int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream)
 
 	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV4_ADDRESS,
 	                &tlvs->ipv4_address, stream);
+	if (rv)
+		return rv;
+
+	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_ADDRESS,
+	                &tlvs->ipv6_address, stream);
 	if (rv)
 		return rv;
 
@@ -1962,6 +2039,7 @@ TLV_OPS(protocols_supported, "TLV 129 Protocols Supported");
 ITEM_TLV_OPS(ipv4_address, "TLV 132 IPv4 Interface Address");
 ITEM_TLV_OPS(extended_ip_reach, "TLV 135 Extended IP Reachability");
 TLV_OPS(dynamic_hostname, "TLV 137 Dynamic Hostname");
+ITEM_TLV_OPS(ipv6_address, "TLV 232 IPv6 Interface Address");
 ITEM_TLV_OPS(ipv6_reach, "TLV 236 IPv6 Reachability");
 
 SUBTLV_OPS(ipv6_source_prefix, "Sub-TLV 22 IPv6 Source Prefix");
@@ -1981,6 +2059,7 @@ static const struct tlv_ops *tlv_table[ISIS_CONTEXT_MAX][ISIS_TLV_MAX] = {
 		[ISIS_TLV_EXTENDED_IP_REACH] = &tlv_extended_ip_reach_ops,
 		[ISIS_TLV_MT_IP_REACH] = &tlv_extended_ip_reach_ops,
 		[ISIS_TLV_DYNAMIC_HOSTNAME] = &tlv_dynamic_hostname_ops,
+		[ISIS_TLV_IPV6_ADDRESS] = &tlv_ipv6_address_ops,
 		[ISIS_TLV_IPV6_REACH] = &tlv_ipv6_reach_ops,
 		[ISIS_TLV_MT_IPV6_REACH] = &tlv_ipv6_reach_ops,
 	},

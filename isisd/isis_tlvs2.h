@@ -94,6 +94,13 @@ struct isis_ipv4_address {
 	struct in_addr addr;
 };
 
+struct isis_ipv6_address;
+struct isis_ipv6_address {
+	struct isis_ipv6_address *next;
+
+	struct in6_addr addr;
+};
+
 struct isis_item_list;
 struct isis_item_list {
 	struct isis_item *head;
@@ -119,6 +126,7 @@ struct isis_tlvs {
 	struct isis_protocols_supported protocols_supported;
 	struct isis_item_list oldstyle_ip_reach_ext;
 	struct isis_item_list ipv4_address;
+	struct isis_item_list ipv6_address;
 	struct isis_item_list extended_ip_reach;
 	struct isis_mt_item_list mt_ip_reach;
 	char *hostname;
@@ -142,7 +150,6 @@ enum isis_tlv_context {
 /* TODO: 10 Auth
          12 Checksum
         134 TE Router ID
-        232 IPv6 Addr
         242 MT Router Info
 */
 
@@ -162,6 +169,7 @@ enum isis_tlv_type {
 	ISIS_TLV_EXTENDED_IP_REACH = 135,
 	ISIS_TLV_DYNAMIC_HOSTNAME = 137,
 	ISIS_TLV_MT_REACH = 222,
+	ISIS_TLV_IPV6_ADDRESS = 232,
 	ISIS_TLV_MT_IP_REACH = 235,
 	ISIS_TLV_IPV6_REACH = 236,
 	ISIS_TLV_MT_IPV6_REACH = 237,
