@@ -1945,6 +1945,37 @@ process_psnp (int level, struct isis_circuit *circuit, const u_char *ssnpa)
   return process_snp (ISIS_SNP_PSNP_FLAG, level, circuit, ssnpa);
 }
 
+static int
+pdu_size(uint8_t pdu_type, uint8_t *size)
+{
+  switch (pdu_type)
+    {
+    case L1_LAN_HELLO:
+    case L2_LAN_HELLO:
+      *size = ISIS_LANHELLO_HDRLEN;
+      break;
+    case P2P_HELLO:
+      *size = ISIS_P2PHELLO_HDRLEN;
+      break;
+    case L1_LINK_STATE:
+    case L2_LINK_STATE:
+      *size = ISIS_LSP_HDR_LEN;
+      break;
+    case L1_COMPLETE_SEQ_NUM:
+    case L2_COMPLETE_SEQ_NUM:
+      *size = ISIS_CSNP_HDRLEN;
+      break;
+    case L1_PARTIAL_SEQ_NUM:
+    case L2_PARTIAL_SEQ_NUM:
+      *size = ISIS_PSNP_HDRLEN;
+      break;
+    default:
+      return 1;
+    }
+  *size += ISIS_FIXED_HDR_LEN;
+  return 0;
+}
+
 /*
  * PDU Dispatcher
  */
@@ -1952,59 +1983,73 @@ process_psnp (int level, struct isis_circuit *circuit, const u_char *ssnpa)
 static int
 isis_handle_pdu (struct isis_circuit *circuit, u_char * ssnpa)
 {
-  struct isis_fixed_hdr *hdr;
-
   int retval = ISIS_OK;
 
-  /*
-   * Let's first read data from stream to the header
-   */
-  hdr = (struct isis_fixed_hdr *) STREAM_DATA (circuit->rcv_stream);
-
-  if ((hdr->idrp != ISO10589_ISIS) && (hdr->idrp != ISO9542_ESIS))
+  /* Verify that at least the 8 bytes fixed header have been received */
+  if (stream_get_endp(circuit->rcv_stream) < ISIS_FIXED_HDR_LEN)
     {
-      zlog_err ("Not an IS-IS or ES-IS packet IDRP=%02x", hdr->idrp);
+      zlog_err ("PDU is too short to be IS-IS.");
       return ISIS_ERROR;
     }
 
-  /* now we need to know if this is an ISO 9542 packet and
-   * take real good care of it, waaa!
-   */
-  if (hdr->idrp == ISO9542_ESIS)
-    {
-      zlog_err ("No support for ES-IS packet IDRP=%02x", hdr->idrp);
-      return ISIS_ERROR;
-    }
-  stream_set_getp (circuit->rcv_stream, ISIS_FIXED_HDR_LEN);
+  uint8_t idrp = stream_getc(circuit->rcv_stream);
+  uint8_t length = stream_getc(circuit->rcv_stream);
+  uint8_t version1 = stream_getc(circuit->rcv_stream);
+  uint8_t id_len = stream_getc(circuit->rcv_stream);
+  uint8_t pdu_type = stream_getc(circuit->rcv_stream) & 0x1f; /* bits 6-8 are reserved */
+  uint8_t version2 = stream_getc(circuit->rcv_stream);
+  stream_forward_getp(circuit->rcv_stream, 1); /* reserved */
+  uint8_t max_area_addrs = stream_getc(circuit->rcv_stream);
 
-  /*
-   * and then process it
-   */
-
-  if (hdr->length < ISIS_MINIMUM_FIXED_HDR_LEN)
+  if (idrp == ISO9542_ESIS)
     {
-      zlog_err ("Fixed header length = %d", hdr->length);
+      zlog_err ("No support for ES-IS packet IDRP=%"PRIx8, idrp);
       return ISIS_ERROR;
     }
 
-  if (hdr->version1 != 1)
+  if (idrp != ISO10589_ISIS)
     {
-      zlog_warn ("Unsupported ISIS version %u", hdr->version1);
+      zlog_err ("Not an IS-IS packet IDRP=%"PRIx8, idrp);
+      return ISIS_ERROR;
+    }
+
+  if (version1 != 1)
+    {
+      zlog_warn ("Unsupported ISIS version %"PRIu8, version1);
       return ISIS_WARNING;
     }
-  /* either 6 or 0 */
-  if ((hdr->id_len != 0) && (hdr->id_len != ISIS_SYS_ID_LEN))
+
+  if (id_len != 0 && id_len != ISIS_SYS_ID_LEN)
     {
       zlog_err
-	("IDFieldLengthMismatch: ID Length field in a received PDU  %u, "
-	 "while the parameter for this IS is %u", hdr->id_len,
-	 ISIS_SYS_ID_LEN);
+	("IDFieldLengthMismatch: ID Length field in a received PDU  %"PRIu8 ", "
+	 "while the parameter for this IS is %u", id_len, ISIS_SYS_ID_LEN);
       return ISIS_ERROR;
     }
 
-  if (hdr->version2 != 1)
+  uint8_t expected_length;
+  if (pdu_size(pdu_type, &expected_length))
     {
-      zlog_warn ("Unsupported ISIS version %u", hdr->version2);
+      zlog_warn ("Unsupported ISIS PDU %"PRIu8, pdu_type);
+      return ISIS_WARNING;
+    }
+
+  if (length != expected_length)
+    {
+      zlog_err ("Exepected fixed header length = %"PRIu8 " but got %"PRIu8,
+                expected_length, length);
+      return ISIS_ERROR;
+    }
+
+  if (stream_get_endp(circuit->rcv_stream) < length)
+    {
+      zlog_err ("PDU is too short to contain fixed header of given PDU type.");
+      return ISIS_ERROR;
+    }
+
+  if (version2 != 1)
+    {
+      zlog_warn ("Unsupported ISIS PDU version %"PRIu8, version2);
       return ISIS_WARNING;
     }
 
@@ -2016,16 +2061,15 @@ isis_handle_pdu (struct isis_circuit *circuit, u_char * ssnpa)
     }
 
   /* either 3 or 0 */
-  if ((hdr->max_area_addrs != 0)
-      && (hdr->max_area_addrs != isis->max_area_addrs))
+  if (max_area_addrs != 0 && max_area_addrs != isis->max_area_addrs)
     {
       zlog_err ("maximumAreaAddressesMismatch: maximumAreaAdresses in a "
-		"received PDU %u while the parameter for this IS is %u",
-		hdr->max_area_addrs, isis->max_area_addrs);
+		"received PDU %"PRIu8 " while the parameter for this IS is %u",
+		max_area_addrs, isis->max_area_addrs);
       return ISIS_ERROR;
     }
 
-  switch (hdr->pdu_type)
+  switch (pdu_type)
     {
     case L1_LAN_HELLO:
       retval = process_lan_hello (ISIS_LEVEL1, circuit, ssnpa);
@@ -2100,32 +2144,8 @@ fill_fixed_hdr(uint8_t pdu_type, struct stream *stream)
 {
   uint8_t length;
 
-  switch (pdu_type)
-    {
-    case L1_LAN_HELLO:
-    case L2_LAN_HELLO:
-      length = ISIS_LANHELLO_HDRLEN;
-      break;
-    case P2P_HELLO:
-      length = ISIS_P2PHELLO_HDRLEN;
-      break;
-    case L1_LINK_STATE:
-    case L2_LINK_STATE:
-      length = ISIS_LSP_HDR_LEN;
-      break;
-    case L1_COMPLETE_SEQ_NUM:
-    case L2_COMPLETE_SEQ_NUM:
-      length = ISIS_CSNP_HDRLEN;
-      break;
-    case L1_PARTIAL_SEQ_NUM:
-    case L2_PARTIAL_SEQ_NUM:
-      length = ISIS_PSNP_HDRLEN;
-      break;
-    default:
-      zlog_warn ("fill_fixed_hdr(): unknown pdu type %"PRIu8, pdu_type);
-      assert(0);
-    }
-  length += ISIS_FIXED_HDR_LEN;
+  if (pdu_size(pdu_type, &length))
+    assert(!"Unknown PDU Type");
 
   stream_putc(stream, ISO10589_ISIS); /* IDRP */
   stream_putc(stream, length);        /* Length of fixed header */

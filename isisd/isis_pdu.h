@@ -66,37 +66,6 @@ struct esis_fixed_hdr
 #define ISH_PDU              4
 #define RD_PDU               5
 
-/*
- *                       IS to IS Fixed Header
- *  +-------+-------+-------+-------+-------+-------+-------+-------+
- *  |         Intradomain Routeing Protocol Discriminator           | 
- *  +-------+-------+-------+-------+-------+-------+-------+-------+
- *  |                       Length Indicator                        |
- *  +-------+-------+-------+-------+-------+-------+-------+-------+
- *  |                  Version/Protocol ID extension                |
- *  +-------+-------+-------+-------+-------+-------+-------+-------+
- *  |   R   |   R   |   R   |              PDU Type                 |      
- *  +-------+-------+-------+-------+-------+-------+-------+-------+
- *  |                            Version                            |
- *  +-------+-------+-------+-------+-------+-------+-------+-------+
- *  |                            Reserved                           |
- *  +-------+-------+-------+-------+-------+-------+-------+-------+
- *  |                       Maximum Area Addresses                  |      
- *  +-------+-------+-------+-------+-------+-------+-------+-------+
- */
-
-struct isis_fixed_hdr
-{
-  u_char idrp;
-  u_char length;
-  u_char version1;
-  u_char id_len;
-  u_char pdu_type;
-  u_char version2;
-  u_char reserved;
-  u_char max_area_addrs;
-} __attribute__ ((packed));
-
 #define ISIS_FIXED_HDR_LEN 8
 
 /*
