@@ -2092,72 +2092,54 @@ isis_receive (struct thread *thread)
   return retval;
 }
 
- /* filling of the fixed isis header */
+/*
+ * SEND SIDE
+ */
 void
-fill_fixed_hdr (struct isis_fixed_hdr *hdr, u_char pdu_type)
+fill_fixed_hdr(uint8_t pdu_type, struct stream *stream)
 {
-  memset (hdr, 0, sizeof (struct isis_fixed_hdr));
-
-  hdr->idrp = ISO10589_ISIS;
+  uint8_t length;
 
   switch (pdu_type)
     {
     case L1_LAN_HELLO:
     case L2_LAN_HELLO:
-      hdr->length = ISIS_LANHELLO_HDRLEN;
+      length = ISIS_LANHELLO_HDRLEN;
       break;
     case P2P_HELLO:
-      hdr->length = ISIS_P2PHELLO_HDRLEN;
+      length = ISIS_P2PHELLO_HDRLEN;
       break;
     case L1_LINK_STATE:
     case L2_LINK_STATE:
-      hdr->length = ISIS_LSP_HDR_LEN;
+      length = ISIS_LSP_HDR_LEN;
       break;
     case L1_COMPLETE_SEQ_NUM:
     case L2_COMPLETE_SEQ_NUM:
-      hdr->length = ISIS_CSNP_HDRLEN;
+      length = ISIS_CSNP_HDRLEN;
       break;
     case L1_PARTIAL_SEQ_NUM:
     case L2_PARTIAL_SEQ_NUM:
-      hdr->length = ISIS_PSNP_HDRLEN;
+      length = ISIS_PSNP_HDRLEN;
       break;
     default:
-      zlog_warn ("fill_fixed_hdr(): unknown pdu type %d", pdu_type);
-      return;
+      zlog_warn ("fill_fixed_hdr(): unknown pdu type %"PRIu8, pdu_type);
+      assert(0);
     }
-  hdr->length += ISIS_FIXED_HDR_LEN;
-  hdr->pdu_type = pdu_type;
-  hdr->version1 = 1;
-  hdr->id_len = 0;		/* ISIS_SYS_ID_LEN -  0==6 */
-  hdr->version2 = 1;
-  hdr->max_area_addrs = 0;	/* isis->max_area_addrs -  0==3 */
-}
+  length += ISIS_FIXED_HDR_LEN;
 
-/*
- * SEND SIDE                             
- */
-static void
-fill_fixed_hdr_andstream (struct isis_fixed_hdr *hdr, u_char pdu_type,
-			  struct stream *stream)
-{
-  fill_fixed_hdr (hdr, pdu_type);
-
-  stream_putc (stream, hdr->idrp);
-  stream_putc (stream, hdr->length);
-  stream_putc (stream, hdr->version1);
-  stream_putc (stream, hdr->id_len);
-  stream_putc (stream, hdr->pdu_type);
-  stream_putc (stream, hdr->version2);
-  stream_putc (stream, hdr->reserved);
-  stream_putc (stream, hdr->max_area_addrs);
-
-  return;
+  stream_putc(stream, ISO10589_ISIS); /* IDRP */
+  stream_putc(stream, length);        /* Length of fixed header */
+  stream_putc(stream, 1);             /* Version/Protocol ID Extension 1 */
+  stream_putc(stream, 0);             /* ID Length, 0 => 6 */
+  stream_putc(stream, pdu_type);
+  stream_putc(stream, 1);             /* Subversion */
+  stream_putc(stream, 0);             /* Reserved */
+  stream_putc(stream, 0);             /* Max Area Addresses 0 => 3 */
 }
 
 int
 send_hello (struct isis_circuit *circuit, int level)
 {
-  struct isis_fixed_hdr fixed_hdr;
   struct isis_lan_hello_hdr hello_hdr;
   struct isis_p2p_hello_hdr p2p_hello_hdr;
   unsigned char hmac_md5_hash[ISIS_AUTH_MD5_SIZE];
@@ -2176,15 +2158,14 @@ send_hello (struct isis_circuit *circuit, int level)
 
   isis_circuit_stream(circuit, &circuit->snd_stream);
 
+  uint8_t pdu_type;
+
   if (circuit->circ_type == CIRCUIT_T_BROADCAST)
-    if (level == IS_LEVEL_1)
-      fill_fixed_hdr_andstream (&fixed_hdr, L1_LAN_HELLO,
-				circuit->snd_stream);
-    else
-      fill_fixed_hdr_andstream (&fixed_hdr, L2_LAN_HELLO,
-				circuit->snd_stream);
+    pdu_type = (level == IS_LEVEL_1) ? L1_LAN_HELLO : L2_LAN_HELLO;
   else
-    fill_fixed_hdr_andstream (&fixed_hdr, P2P_HELLO, circuit->snd_stream);
+    pdu_type = P2P_HELLO;
+
+  fill_fixed_hdr(pdu_type, circuit->snd_stream);
 
   /*
    * Fill LAN Level 1 or 2 Hello PDU header
@@ -2451,22 +2432,17 @@ static int
 build_csnp (int level, u_char * start, u_char * stop, struct list *lsps,
 	    struct isis_circuit *circuit)
 {
-  struct isis_fixed_hdr fixed_hdr;
   struct isis_passwd *passwd;
   unsigned long lenp;
   u_int16_t length;
   unsigned char hmac_md5_hash[ISIS_AUTH_MD5_SIZE];
   unsigned long auth_tlv_offset = 0;
   int retval = ISIS_OK;
+  uint8_t pdu_type = (level == IS_LEVEL_1) ? L1_COMPLETE_SEQ_NUM : L2_COMPLETE_SEQ_NUM;
 
   isis_circuit_stream(circuit, &circuit->snd_stream);
 
-  if (level == IS_LEVEL_1)
-    fill_fixed_hdr_andstream (&fixed_hdr, L1_COMPLETE_SEQ_NUM,
-			      circuit->snd_stream);
-  else
-    fill_fixed_hdr_andstream (&fixed_hdr, L2_COMPLETE_SEQ_NUM,
-			      circuit->snd_stream);
+  fill_fixed_hdr(pdu_type, circuit->snd_stream);
 
   /*
    * Fill Level 1 or 2 Complete Sequence Numbers header
@@ -2775,7 +2751,6 @@ send_l2_csnp (struct thread *thread)
 static int
 build_psnp (int level, struct isis_circuit *circuit, struct list *lsps)
 {
-  struct isis_fixed_hdr fixed_hdr;
   unsigned long lenp;
   u_int16_t length;
   struct isis_lsp *lsp;
@@ -2784,15 +2759,11 @@ build_psnp (int level, struct isis_circuit *circuit, struct list *lsps)
   unsigned char hmac_md5_hash[ISIS_AUTH_MD5_SIZE];
   unsigned long auth_tlv_offset = 0;
   int retval = ISIS_OK;
+  uint8_t pdu_type = (level == IS_LEVEL_1) ? L1_PARTIAL_SEQ_NUM : L2_PARTIAL_SEQ_NUM;
 
   isis_circuit_stream(circuit, &circuit->snd_stream);
 
-  if (level == IS_LEVEL_1)
-    fill_fixed_hdr_andstream (&fixed_hdr, L1_PARTIAL_SEQ_NUM,
-			      circuit->snd_stream);
-  else
-    fill_fixed_hdr_andstream (&fixed_hdr, L2_PARTIAL_SEQ_NUM,
-			      circuit->snd_stream);
+  fill_fixed_hdr(pdu_type, circuit->snd_stream);
 
   /*
    * Fill Level 1 or 2 Partial Sequence Numbers header
@@ -3131,18 +3102,11 @@ ack_lsp (struct isis_link_state_hdr *hdr, struct isis_circuit *circuit,
   unsigned long lenp;
   int retval;
   u_int16_t length;
-  struct isis_fixed_hdr fixed_hdr;
+  uint8_t pdu_type = (level == IS_LEVEL_1) ? L1_PARTIAL_SEQ_NUM : L2_PARTIAL_SEQ_NUM;
 
   isis_circuit_stream(circuit, &circuit->snd_stream);
 
-  //  fill_llc_hdr (stream);
-  if (level == IS_LEVEL_1)
-    fill_fixed_hdr_andstream (&fixed_hdr, L1_PARTIAL_SEQ_NUM,
-			      circuit->snd_stream);
-  else
-    fill_fixed_hdr_andstream (&fixed_hdr, L2_PARTIAL_SEQ_NUM,
-			      circuit->snd_stream);
-
+  fill_fixed_hdr(pdu_type, circuit->snd_stream);
 
   lenp = stream_get_endp (circuit->snd_stream);
   stream_putw (circuit->snd_stream, 0);	/* PDU length  */

@@ -30,7 +30,6 @@
  * sake it should better be avoided */
 struct isis_lsp
 {
-  struct isis_fixed_hdr *isis_header;		/* normally equals pdu */
   struct isis_link_state_hdr *lsp_header;	/* pdu + isis_header_len */
   struct stream *pdu;				/* full pdu lsp */
   union
