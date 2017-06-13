@@ -240,7 +240,7 @@ nlpid2string (struct nlpids *nlpids)
 
   for (i = 0; i < nlpids->count; i++)
     {
-      pos += sprintf (pos, nlpid2str(nlpids->nlpids[i]));
+      pos += sprintf (pos, "%s", nlpid2str(nlpids->nlpids[i]));
       if (nlpids->count - i > 1)
         pos += sprintf (pos, ", ");
     }
