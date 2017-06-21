@@ -1389,6 +1389,116 @@ out:
 	return 1;
 }
 
+/* Functions related to TLV 10 Authentication */
+static struct isis_item *copy_item_auth(struct isis_item *i)
+{
+	struct isis_auth *auth = (struct isis_auth*)i;
+	struct isis_auth *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+
+	rv->type = auth->type;
+	rv->length = auth->length;
+	memcpy(rv->value, auth->value, sizeof(rv->value));
+	return (struct isis_item*)rv;
+}
+
+static void format_item_auth(uint16_t mtid, struct isis_item *i,
+                             struct sbuf *buf, int indent)
+{
+	struct isis_auth *auth = (struct isis_auth*)i;
+	char obuf[768];
+
+	sbuf_push(buf, indent, "Authentication:\n");
+	switch (auth->type) {
+	case ISIS_PASSWD_TYPE_CLEARTXT:
+		zlog_sanitize(obuf, sizeof(obuf), auth->value, auth->length);
+		sbuf_push(buf, indent, "  Password: %s\n", obuf);
+		break;
+	case ISIS_PASSWD_TYPE_HMAC_MD5:
+		for (unsigned int i = 0; i < 16; i++) {
+			snprintf(obuf + 2*i, sizeof(obuf) - 2*i,
+				 "%02" PRIx8, auth->value[i]);
+		}
+		sbuf_push(buf, indent, "  HMAC-MD5: %s\n", obuf);
+		break;
+	default:
+		sbuf_push(buf, indent, "  Unknown (%" PRIu8 ")\n", auth->type);
+		break;
+	};
+}
+
+static void free_item_auth(struct isis_item *i)
+{
+	XFREE(MTYPE_ISIS_TLV2, i);
+}
+
+static int pack_item_auth(struct isis_item *i,
+                          struct stream *s)
+{
+	struct isis_auth *auth = (struct isis_auth*)i;
+
+	if (STREAM_WRITEABLE(s) < 1)
+		return 1;
+	stream_putc(s, auth->type);
+
+	switch (auth->type) {
+	case ISIS_PASSWD_TYPE_CLEARTXT:
+		if (STREAM_WRITEABLE(s) < auth->length)
+			return 1;
+		stream_put(s, auth->value, auth->length);
+		break;
+	case ISIS_PASSWD_TYPE_HMAC_MD5:
+		if (STREAM_WRITEABLE(s) < 16)
+			return 1;
+		auth->offset = stream_get_endp(s);
+		stream_put(s, NULL, 16);
+		break;
+	default:
+		return 1;
+	}
+
+	return 0;
+}
+
+static int unpack_item_auth(uint16_t mtid,
+                            uint8_t len,
+                            struct stream *s,
+                            struct sbuf *log,
+                            void *dest,
+                            int indent)
+{
+	struct isis_tlvs *tlvs = dest;
+
+	sbuf_push(log, indent, "Unpack Auth TLV...\n");
+	if (len < 1) {
+		sbuf_push(log, indent, "Not enough data left.(Expected 1 bytes of auth type, got %"
+		          PRIu8 ")\n", len);
+		return 1;
+	}
+
+	struct isis_auth *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+
+	rv->type = stream_getc(s);
+	switch (rv->type) {
+	case ISIS_PASSWD_TYPE_HMAC_MD5:
+		rv->length = len - 1;
+		if (rv->length != 16) {
+			sbuf_push(log, indent, "Unexpected auth length for HMAC-MD5 (expected 16, got %"
+			          PRIu8 ")\n", rv->length);
+			XFREE(MTYPE_ISIS_TLV2, rv);
+			return 1;
+		}
+		break;
+	default:
+		rv->length = len - 1;
+		break;
+	}
+
+	stream_get(rv->value, s, rv->length);
+	format_item_auth(mtid, (struct isis_item*)rv, log, indent + 2);
+	append_item(&tlvs->isis_auth, (struct isis_item*)rv);
+	return 0;
+}
+
 /* Functions relating to item TLVs */
 
 static void init_item_list(struct isis_item_list *items)
@@ -1501,14 +1611,16 @@ top:
 	len_pos = stream_get_endp(s);
 	stream_putc(s, 0); /* Put 0 as length for now */
 
-	if (IS_COMPAT_MT_TLV(type)
+	if (context == ISIS_CONTEXT_LSP
+	    && IS_COMPAT_MT_TLV(type)
 	    && mtid != ISIS_MT_IPV4_UNICAST) {
 		if (STREAM_WRITEABLE(s) < 2)
 			return 1;
 		stream_putw(s, mtid);
 	}
 
-	if (type == ISIS_TLV_OLDSTYLE_REACH) {
+	if (context == ISIS_CONTEXT_LSP
+	    && type == ISIS_TLV_OLDSTYLE_REACH) {
 		if (STREAM_WRITEABLE(s) < 1)
 			return 1;
 		stream_putc(s, 0); /* Virtual flag is set to 0 */
@@ -1521,6 +1633,12 @@ top:
 			return rv;
 
 		len = stream_get_endp(s) - len_pos - 1;
+
+		/* Multiple auths don't go into one TLV, so always break */
+		if (context == ISIS_CONTEXT_LSP
+		    && type == ISIS_TLV_AUTH)
+			break;
+
 		if (len > 255) {
 			if (!last_len) /* strange, not a single item fit */
 				return 1;
@@ -1578,7 +1696,8 @@ static int unpack_tlv_with_items(enum isis_tlv_context context,
 	tlv_start = stream_get_getp(s);
 	tlv_pos = 0;
 
-	if (IS_COMPAT_MT_TLV(tlv_type)) {
+	if (context == ISIS_CONTEXT_LSP
+	    && IS_COMPAT_MT_TLV(tlv_type)) {
 		if (tlv_len < 2) {
 			sbuf_push(log, indent, "TLV is too short to contain MTID\n");
 			return 1;
@@ -1592,7 +1711,8 @@ static int unpack_tlv_with_items(enum isis_tlv_context context,
 		mtid = ISIS_MT_IPV4_UNICAST;
 	}
 
-	if (tlv_type == ISIS_TLV_OLDSTYLE_REACH) {
+	if (context == ISIS_CONTEXT_LSP
+	    && tlv_type == ISIS_TLV_OLDSTYLE_REACH) {
 		if (tlv_len - tlv_pos < 1) {
 			sbuf_push(log, indent, "TLV is too short for old style reach\n");
 			return 1;
@@ -1601,10 +1721,12 @@ static int unpack_tlv_with_items(enum isis_tlv_context context,
 		tlv_pos += 1;
 	}
 
-	if (tlv_type == ISIS_TLV_OLDSTYLE_IP_REACH) {
+	if (context == ISIS_CONTEXT_LSP
+	    && tlv_type == ISIS_TLV_OLDSTYLE_IP_REACH) {
 		struct isis_tlvs *tlvs = dest;
 		dest = &tlvs->oldstyle_ip_reach;
-	} else if (tlv_type == ISIS_TLV_OLDSTYLE_IP_REACH_EXT) {
+	} else if (context == ISIS_CONTEXT_LSP
+	           && tlv_type == ISIS_TLV_OLDSTYLE_IP_REACH_EXT) {
 		struct isis_tlvs *tlvs = dest;
 		dest = &tlvs->oldstyle_ip_reach_ext;
 	}
@@ -1717,6 +1839,7 @@ struct isis_tlvs *isis_alloc_tlvs(void)
 
 	result = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*result));
 
+	init_item_list(&result->isis_auth);
 	init_item_list(&result->area_addresses);
 	init_item_list(&result->mt_router_info);
 	init_item_list(&result->oldstyle_reach);
@@ -1739,6 +1862,9 @@ struct isis_tlvs *isis_alloc_tlvs(void)
 struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
 {
 	struct isis_tlvs *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+
+	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_AUTH,
+	           &tlvs->isis_auth, &rv->isis_auth);
 
 	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_AREA_ADDRESSES,
 	           &tlvs->area_addresses, &rv->area_addresses);
@@ -1796,6 +1922,9 @@ struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
 static void format_tlvs(struct isis_tlvs *tlvs, struct sbuf *buf, int indent)
 {
 	format_tlv_protocols_supported(&tlvs->protocols_supported, buf, indent);
+
+	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_AUTH,
+	             &tlvs->isis_auth, buf, indent);
 
 	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_AREA_ADDRESSES,
 	             &tlvs->area_addresses, buf, indent);
@@ -1862,6 +1991,8 @@ void isis_free_tlvs(struct isis_tlvs *tlvs)
 	if (!tlvs)
 		return;
 
+	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_AUTH,
+	           &tlvs->isis_auth);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_AREA_ADDRESSES,
 	           &tlvs->area_addresses);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_ROUTER_INFO,
@@ -1901,6 +2032,11 @@ void isis_free_tlvs(struct isis_tlvs *tlvs)
 int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream)
 {
 	int rv;
+
+	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_AUTH,
+	                &tlvs->isis_auth, stream);
+	if (rv)
+		return rv;
 
 	rv = pack_tlv_protocols_supported(&tlvs->protocols_supported, stream);
 	if (rv)
@@ -2124,6 +2260,7 @@ ITEM_TLV_OPS(area_address, "TLV 1 Area Addresses");
 ITEM_TLV_OPS(oldstyle_reach, "TLV 2 IS Reachability");
 ITEM_TLV_OPS(lan_neighbor, "TLV 6 LAN Neighbors");
 ITEM_TLV_OPS(lsp_entry, "TLV 9 LSP Entries");
+ITEM_TLV_OPS(auth, "TLV 10 IS-IS Auth");
 ITEM_TLV_OPS(extended_reach, "TLV 22 Extended Reachability");
 ITEM_TLV_OPS(oldstyle_ip_reach, "TLV 128/130 IP Reachability");
 TLV_OPS(protocols_supported, "TLV 129 Protocols Supported");
@@ -2142,6 +2279,7 @@ static const struct tlv_ops *tlv_table[ISIS_CONTEXT_MAX][ISIS_TLV_MAX] = {
 		[ISIS_TLV_OLDSTYLE_REACH] = &tlv_oldstyle_reach_ops,
 		[ISIS_TLV_LAN_NEIGHBORS] = &tlv_lan_neighbor_ops,
 		[ISIS_TLV_LSP_ENTRY] = &tlv_lsp_entry_ops,
+		[ISIS_TLV_AUTH] = &tlv_auth_ops,
 		[ISIS_TLV_EXTENDED_REACH] = &tlv_extended_reach_ops,
 		[ISIS_TLV_MT_REACH] = &tlv_extended_reach_ops,
 		[ISIS_TLV_OLDSTYLE_IP_REACH] = &tlv_oldstyle_ip_reach_ops,

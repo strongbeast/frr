@@ -110,6 +110,17 @@ struct isis_mt_router_info {
 	uint16_t mtid;
 };
 
+struct isis_auth;
+struct isis_auth {
+	struct isis_auth *next;
+
+	uint8_t type;
+	uint8_t length;
+	uint8_t value[256];
+
+	size_t offset; /* Only valid after packing */
+};
+
 struct isis_item_list;
 struct isis_item_list {
 	struct isis_item *head;
@@ -125,6 +136,7 @@ struct isis_item_list *isis_get_mt_items(struct isis_mt_item_list *m, uint16_t m
 struct isis_item_list *isis_lookup_mt_items(struct isis_mt_item_list *m, uint16_t mtid);
 
 struct isis_tlvs {
+	struct isis_item_list isis_auth;
 	struct isis_item_list area_addresses;
 	struct isis_item_list oldstyle_reach;
 	struct isis_item_list lan_neighbor;
@@ -157,8 +169,7 @@ enum isis_tlv_context {
 	ISIS_CONTEXT_MAX
 };
 
-/* TODO: 10 Auth
-         12 Checksum
+/* TODO: 12 Checksum
         134 TE Router ID
 */
 
@@ -169,6 +180,7 @@ enum isis_tlv_type {
 	ISIS_TLV_LAN_NEIGHBORS = 6,
 	ISIS_TLV_PADDING = 8,
 	ISIS_TLV_LSP_ENTRY = 9,
+	ISIS_TLV_AUTH = 10,
 	ISIS_TLV_EXTENDED_REACH = 22,
 
 	ISIS_TLV_OLDSTYLE_IP_REACH = 128,
