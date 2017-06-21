@@ -2157,14 +2157,50 @@ fill_fixed_hdr(uint8_t pdu_type, struct stream *stream)
   stream_putc(stream, 0);             /* Max Area Addresses 0 => 3 */
 }
 
+static void
+put_hello_hdr(struct isis_circuit *circuit, int level, size_t *len_pointer)
+{
+  uint8_t pdu_type;
+
+  if (circuit->circ_type == CIRCUIT_T_BROADCAST)
+    pdu_type = (level == IS_LEVEL_1) ? L1_LAN_HELLO : L2_LAN_HELLO;
+  else
+    pdu_type = P2P_HELLO;
+
+  isis_circuit_stream(circuit, &circuit->snd_stream);
+  fill_fixed_hdr(pdu_type, circuit->snd_stream);
+
+  stream_putc(circuit->snd_stream, circuit->is_type);
+  stream_put(circuit->snd_stream, circuit->area->isis->sysid, ISIS_SYS_ID_LEN);
+
+  uint32_t holdtime = circuit->hello_multiplier[level - 1]
+                      * circuit->hello_interval[level - 1];
+
+  if (holdtime > 0xffff)
+    holdtime = 0xffff;
+
+  stream_putw(circuit->snd_stream, holdtime);
+  *len_pointer = stream_get_endp(circuit->snd_stream);
+  stream_putw(circuit->snd_stream, 0); /* length is filled in later */
+
+  if (circuit->circ_type == CIRCUIT_T_BROADCAST)
+    {
+      u_char *desig_is = (level == IS_LEVEL_1) ? circuit->u.bc.l1_desig_is
+                                               : circuit->u.bc.l2_desig_is;
+      stream_putc(circuit->snd_stream, circuit->priority[level - 1]);
+      stream_put(circuit->snd_stream, desig_is, ISIS_SYS_ID_LEN + 1);
+    }
+  else
+    {
+      stream_putc(circuit->snd_stream, circuit->circuit_id);
+    }
+}
+
 int
 send_hello (struct isis_circuit *circuit, int level)
 {
-  struct isis_lan_hello_hdr hello_hdr;
-  struct isis_p2p_hello_hdr p2p_hello_hdr;
   unsigned char hmac_md5_hash[ISIS_AUTH_MD5_SIZE];
   size_t len_pointer, length, auth_tlv_offset = 0;
-  u_int32_t interval;
   int retval;
 
   if (circuit->is_passive)
@@ -2176,55 +2212,7 @@ send_hello (struct isis_circuit *circuit, int level)
       return ISIS_WARNING;
     }
 
-  isis_circuit_stream(circuit, &circuit->snd_stream);
-
-  uint8_t pdu_type;
-
-  if (circuit->circ_type == CIRCUIT_T_BROADCAST)
-    pdu_type = (level == IS_LEVEL_1) ? L1_LAN_HELLO : L2_LAN_HELLO;
-  else
-    pdu_type = P2P_HELLO;
-
-  fill_fixed_hdr(pdu_type, circuit->snd_stream);
-
-  /*
-   * Fill LAN Level 1 or 2 Hello PDU header
-   */
-  memset (&hello_hdr, 0, sizeof (struct isis_lan_hello_hdr));
-  interval = circuit->hello_multiplier[level - 1] *
-    circuit->hello_interval[level - 1];
-  if (interval > USHRT_MAX)
-    interval = USHRT_MAX;
-  hello_hdr.circuit_t = circuit->is_type;
-  memcpy (hello_hdr.source_id, isis->sysid, ISIS_SYS_ID_LEN);
-  hello_hdr.hold_time = htons ((u_int16_t) interval);
-
-  hello_hdr.pdu_len = 0;	/* Update the PDU Length later */
-  len_pointer = stream_get_endp (circuit->snd_stream) + 3 + ISIS_SYS_ID_LEN;
-
-  /* copy the shared part of the hello to the p2p hello if needed */
-  if (circuit->circ_type == CIRCUIT_T_P2P)
-    {
-      memcpy (&p2p_hello_hdr, &hello_hdr, 5 + ISIS_SYS_ID_LEN);
-      p2p_hello_hdr.local_id = circuit->circuit_id;
-      /* FIXME: need better understanding */
-      stream_put (circuit->snd_stream, &p2p_hello_hdr, ISIS_P2PHELLO_HDRLEN);
-    }
-  else
-    {
-      hello_hdr.prio = circuit->priority[level - 1];
-      if (level == IS_LEVEL_1)
-	{
-	  memcpy (hello_hdr.lan_id, circuit->u.bc.l1_desig_is,
-		  ISIS_SYS_ID_LEN + 1);
-	}
-      else if (level == IS_LEVEL_2)
-	{
-	  memcpy (hello_hdr.lan_id, circuit->u.bc.l2_desig_is,
-		  ISIS_SYS_ID_LEN + 1);
-	}
-      stream_put (circuit->snd_stream, &hello_hdr, ISIS_LANHELLO_HDRLEN);
-    }
+  put_hello_hdr(circuit, level, &len_pointer);
 
   /*
    * Then the variable length part.
