@@ -131,6 +131,7 @@ struct isis_item_list {
 
 	RB_ENTRY(isis_item_list) mt_tree;
 	uint16_t mtid;
+	unsigned int count;
 };
 
 RB_HEAD(isis_mt_item_list, isis_item_list);
@@ -242,4 +243,10 @@ void isis_tlvs_add_mt_router_info(struct isis_tlvs *tlvs, uint16_t mtid,
                                   bool overload, bool attached);
 void isis_tlvs_add_ipv4_addresses(struct isis_tlvs *tlvs, struct list *addresses);
 void isis_tlvs_add_ipv6_addresses(struct isis_tlvs *tlvs, struct list *addresses);
+bool isis_tlvs_auth_is_valid(struct isis_tlvs *tlvs, struct isis_passwd *passwd,
+                             struct stream *stream);
+bool isis_tlvs_area_addresses_match(struct isis_tlvs *tlvs, struct list *addresses);
+struct isis_adjacency;
+void isis_tlvs_to_adj(struct isis_tlvs *tlvs, struct isis_adjacency *adj, bool *changed);
+bool isis_tlvs_own_snpa_found(struct isis_tlvs *tlvs, uint8_t *snpa);
 #endif

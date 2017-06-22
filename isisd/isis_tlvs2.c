@@ -11,6 +11,7 @@
 #include "isis_common2.h"
 #include "isisd/isis_mt.h"
 #include "isisd/isis_misc.h"
+#include "isisd/isis_adjacency.h"
 
 DEFINE_MTYPE_STATIC(ISISD, ISIS_TLV2, "ISIS TLVs (new)")
 DEFINE_MTYPE_STATIC(ISISD, ISIS_SUBTLV, "ISIS Sub-TLVs")
@@ -1489,6 +1490,7 @@ static int unpack_item_auth(uint16_t mtid,
 		return 1;
 	}
 
+	rv->offset = stream_get_getp(s);
 	stream_get(rv->value, s, rv->length);
 	format_item_auth(mtid, (struct isis_item*)rv, log, indent + 2);
 	append_item(&tlvs->isis_auth, (struct isis_item*)rv);
@@ -1501,6 +1503,7 @@ static void init_item_list(struct isis_item_list *items)
 {
 	items->head = NULL;
 	items->tail = &items->head;
+	items->count = 0;
 }
 
 static struct isis_item *copy_item(enum isis_tlv_context context,
@@ -1660,6 +1663,7 @@ static void append_item(struct isis_item_list *dest, struct isis_item *item)
 {
 	*dest->tail = item;
 	dest->tail = &(*dest->tail)->next;
+	dest->count++;
 }
 
 static int unpack_item(uint16_t mtid,
@@ -2471,4 +2475,225 @@ void isis_tlvs_add_ipv6_addresses(struct isis_tlvs *tlvs, struct list *addresses
 		a->addr = ip_addr->prefix;
 		append_item(&tlvs->ipv6_address, (struct isis_item*)a);
 	}
+}
+
+typedef bool(*auth_validator_func)(struct isis_passwd *passwd, struct stream *stream,
+                                   struct isis_auth *auth);
+
+static bool auth_validator_cleartxt(struct isis_passwd *passwd,
+                                    struct stream *stream, struct isis_auth *auth)
+{
+	return (auth->length == passwd->len
+	        && !memcmp(auth->value, passwd->passwd, passwd->len));
+}
+
+static bool auth_validator_hmac_md5(struct isis_passwd *passwd,
+                                    struct stream *stream, struct isis_auth *auth)
+{
+	uint8_t digest[16];
+
+	memset(STREAM_DATA(stream) + auth->offset, 0, 16);
+	hmac_md5(STREAM_DATA(stream), stream_get_endp(stream),
+	         passwd->passwd, passwd->len, digest);
+	memcpy(STREAM_DATA(stream) + auth->offset, auth->value, 16);
+
+	return (!memcmp(digest, auth->value, 16));
+}
+
+static const auth_validator_func auth_validators[] = {
+	[ISIS_PASSWD_TYPE_CLEARTXT] = auth_validator_cleartxt,
+	[ISIS_PASSWD_TYPE_HMAC_MD5] = auth_validator_hmac_md5,
+};
+
+bool isis_tlvs_auth_is_valid(struct isis_tlvs *tlvs,
+                             struct isis_passwd *passwd, struct stream *stream)
+{
+	/* If no auth is set, always pass authentication */
+	if (!passwd->type)
+		return true;
+
+	/* If we don't known how to validate the auth, return invalid */
+	if (passwd->type >= array_size(auth_validators)
+	    || !auth_validators[passwd->type])
+		return false;
+
+	struct isis_auth *auth_head = (struct isis_auth*)tlvs->isis_auth.head;
+	struct isis_auth *auth;
+	for (auth = auth_head; auth; auth = auth->next) {
+		if (auth->type == passwd->type)
+			break;
+	}
+
+	/* If matching auth TLV could not be found, return invalid */
+	if (!auth)
+		return false;
+
+	/* Perform validation and return result */
+	return auth_validators[passwd->type](passwd, stream, auth);
+}
+
+bool isis_tlvs_area_addresses_match(struct isis_tlvs *tlvs, struct list *addresses)
+{
+	struct isis_area_address *addr_head;
+	
+	addr_head = (struct isis_area_address *)tlvs->area_addresses.head;
+	for (struct isis_area_address *addr = addr_head; addr; addr = addr->next) {
+		struct listnode *node;
+		struct area_addr *a;
+
+		for (ALL_LIST_ELEMENTS_RO(addresses, node, a)) {
+			if (a->addr_len == addr->len
+			    && !memcmp(a->area_addr, addr->addr, addr->len))
+				return true;
+		}
+	}
+
+	return false;
+}
+
+static void tlvs_area_addresses_to_adj(struct isis_tlvs *tlvs,
+                                       struct isis_adjacency *adj, bool *changed)
+{
+	if (adj->area_address_count != tlvs->area_addresses.count) {
+		*changed = true;
+		adj->area_address_count = tlvs->area_addresses.count;
+		adj->area_addresses = XREALLOC(MTYPE_ISIS_ADJACENCY_INFO,
+		                               adj->area_addresses,
+		                               adj->area_address_count *
+		                               sizeof(*adj->area_addresses));
+	}
+
+	struct isis_area_address *addr = NULL;
+	for (unsigned int i = 0; i < tlvs->area_addresses.count; i++) {
+		if (!addr)
+			addr = (struct isis_area_address *)tlvs->area_addresses.head;
+		else
+			addr = addr->next;
+
+		if (adj->area_addresses[i].addr_len == addr->len
+		    && !memcmp(adj->area_addresses[i].area_addr,
+		              addr->addr, addr->len)) {
+			continue;
+		}
+
+		*changed = true;
+		adj->area_addresses[i].addr_len = addr->len;
+		memcpy(adj->area_addresses[i].area_addr, addr->addr, addr->len);
+	}
+}
+
+static void tlvs_protocols_supported_to_adj(struct isis_tlvs *tlvs,
+                                            struct isis_adjacency *adj,
+                                            bool *changed)
+{
+	bool ipv4_supported = false, ipv6_supported = false;
+
+	for (uint8_t i = 0; i < tlvs->protocols_supported.count; i++) {
+		if (tlvs->protocols_supported.protocols[i] == NLPID_IP)
+			ipv4_supported = true;
+		if (tlvs->protocols_supported.protocols[i] == NLPID_IPV6)
+			ipv6_supported = true;
+	}
+
+	struct nlpids reduced = {};
+
+	if (ipv4_supported && ipv6_supported) {
+		reduced.count = 2;
+		reduced.nlpids[0] = NLPID_IP;
+		reduced.nlpids[1] = NLPID_IPV6;
+	} else if (ipv4_supported) {
+		reduced.count = 1;
+		reduced.nlpids[0] = NLPID_IP;
+	} else if (ipv6_supported) {
+		reduced.count = 1;
+		reduced.nlpids[1] = NLPID_IPV6;
+	} else {
+		reduced.count = 0;
+	}
+
+	if (adj->nlpids.count == reduced.count
+	    && !memcmp(adj->nlpids.nlpids, reduced.nlpids, reduced.count))
+		return;
+
+	*changed = true;
+	adj->nlpids.count = reduced.count;
+	memcpy(adj->nlpids.nlpids, reduced.nlpids, reduced.count);
+}
+
+static void tlvs_ipv4_addresses_to_adj(struct isis_tlvs *tlvs,
+                                       struct isis_adjacency *adj, bool *changed)
+{
+	if (adj->ipv4_address_count != tlvs->ipv4_address.count) {
+		*changed = true;
+		adj->ipv4_address_count = tlvs->ipv4_address.count;
+		adj->ipv4_addresses = XREALLOC(MTYPE_ISIS_ADJACENCY_INFO,
+		                               adj->ipv4_addresses,
+		                               adj->ipv4_address_count *
+		                               sizeof(*adj->ipv4_addresses));
+	}
+
+	struct isis_ipv4_address *addr = NULL;
+	for (unsigned int i = 0; i < tlvs->ipv4_address.count; i++) {
+		if (!addr)
+			addr = (struct isis_ipv4_address *)tlvs->ipv4_address.head;
+		else
+			addr = addr->next;
+
+		if (!memcmp(&adj->ipv4_addresses[i], &addr->addr, sizeof(addr->addr)))
+			continue;
+
+		*changed = true;
+		adj->ipv4_addresses[i] = addr->addr;
+	}
+}
+
+static void tlvs_ipv6_addresses_to_adj(struct isis_tlvs *tlvs,
+                                       struct isis_adjacency *adj, bool *changed)
+{
+	if (adj->ipv6_address_count != tlvs->ipv6_address.count) {
+		*changed = true;
+		adj->ipv6_address_count = tlvs->ipv6_address.count;
+		adj->ipv6_addresses = XREALLOC(MTYPE_ISIS_ADJACENCY_INFO,
+		                               adj->ipv6_addresses,
+		                               adj->ipv6_address_count *
+		                               sizeof(*adj->ipv6_addresses));
+	}
+
+	struct isis_ipv6_address *addr = NULL;
+	for (unsigned int i = 0; i < tlvs->ipv6_address.count; i++) {
+		if (!addr)
+			addr = (struct isis_ipv6_address *)tlvs->ipv6_address.head;
+		else
+			addr = addr->next;
+
+		if (!memcmp(&adj->ipv6_addresses[i], &addr->addr, sizeof(addr->addr)))
+			continue;
+
+		*changed = true;
+		adj->ipv6_addresses[i] = addr->addr;
+	}
+}
+
+void isis_tlvs_to_adj(struct isis_tlvs *tlvs,
+                      struct isis_adjacency *adj, bool *changed)
+{
+	*changed = false;
+
+	tlvs_area_addresses_to_adj(tlvs, adj, changed);
+	tlvs_protocols_supported_to_adj(tlvs, adj, changed);
+	tlvs_ipv4_addresses_to_adj(tlvs, adj, changed);
+	tlvs_ipv6_addresses_to_adj(tlvs, adj, changed);
+}
+
+bool isis_tlvs_own_snpa_found(struct isis_tlvs *tlvs, uint8_t *snpa)
+{
+	struct isis_lan_neighbor *ne_head;
+	
+	ne_head = (struct isis_lan_neighbor*)tlvs->lan_neighbor.head;
+	for (struct isis_lan_neighbor *ne = ne_head; ne; ne = ne->next) {
+		if (!memcmp(ne->mac, snpa, ETH_ALEN))
+			return true;
+	}
+
+	return false;
 }

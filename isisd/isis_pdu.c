@@ -68,28 +68,6 @@
  */
 
 /*
- * Compares two sets of area addresses
- */
-static int
-area_match (struct list *left, struct list *right)
-{
-  struct area_addr *addr1, *addr2;
-  struct listnode *node1, *node2;
-
-  for (ALL_LIST_ELEMENTS_RO (left, node1, addr1))
-  {
-    for (ALL_LIST_ELEMENTS_RO (right, node2, addr2))
-    {
-      if (addr1->addr_len == addr2->addr_len &&
-	  !memcmp (addr1->area_addr, addr2->area_addr, (int) addr1->addr_len))
-	return 1;		/* match */
-    }
-  }
-
-  return 0;			/* mismatch */
-}
-
-/*
  * Checks whether we should accept a PDU of given level 
  */
 static int
@@ -214,108 +192,6 @@ lsp_authentication_check (struct stream *stream, struct isis_area *area,
 }
 
 /*
- * Processing helper functions
- */
-static void
-del_addr (void *val)
-{
-  XFREE (MTYPE_ISIS_TMP, val);
-}
-
-static void
-tlvs_to_adj_area_addrs (struct tlvs *tlvs, struct isis_adjacency *adj)
-{
-  struct listnode *node;
-  struct area_addr *area_addr, *malloced;
-
-  if (adj->area_addrs)
-    {
-      adj->area_addrs->del = del_addr;
-      list_delete (adj->area_addrs);
-    }
-  adj->area_addrs = list_new ();
-  if (tlvs->area_addrs)
-    {
-      for (ALL_LIST_ELEMENTS_RO (tlvs->area_addrs, node, area_addr))
-      {
-	malloced = XMALLOC (MTYPE_ISIS_TMP, sizeof (struct area_addr));
-	memcpy (malloced, area_addr, sizeof (struct area_addr));
-	listnode_add (adj->area_addrs, malloced);
-      }
-    }
-}
-
-static int
-tlvs_to_adj_nlpids (struct tlvs *tlvs, struct isis_adjacency *adj)
-{
-  int i;
-  struct nlpids *tlv_nlpids;
-
-  if (tlvs->nlpids)
-    {
-
-      tlv_nlpids = tlvs->nlpids;
-      if (tlv_nlpids->count > array_size (adj->nlpids.nlpids))
-        return 1;
-
-      adj->nlpids.count = tlv_nlpids->count;
-
-      for (i = 0; i < tlv_nlpids->count; i++)
-	{
-	  adj->nlpids.nlpids[i] = tlv_nlpids->nlpids[i];
-	}
-    }
-  return 0;
-}
-
-static void
-tlvs_to_adj_ipv4_addrs (struct tlvs *tlvs, struct isis_adjacency *adj)
-{
-  struct listnode *node;
-  struct in_addr *ipv4_addr, *malloced;
-
-  if (adj->ipv4_addrs)
-    {
-      adj->ipv4_addrs->del = del_addr;
-      list_delete (adj->ipv4_addrs);
-    }
-  adj->ipv4_addrs = list_new ();
-  if (tlvs->ipv4_addrs)
-    {
-      for (ALL_LIST_ELEMENTS_RO (tlvs->ipv4_addrs, node, ipv4_addr))
-      {
-	malloced = XMALLOC (MTYPE_ISIS_TMP, sizeof (struct in_addr));
-	memcpy (malloced, ipv4_addr, sizeof (struct in_addr));
-	listnode_add (adj->ipv4_addrs, malloced);
-      }
-    }
-}
-
-static void
-tlvs_to_adj_ipv6_addrs (struct tlvs *tlvs, struct isis_adjacency *adj)
-{
-  struct listnode *node;
-  struct in6_addr *ipv6_addr, *malloced;
-
-  if (adj->ipv6_addrs)
-    {
-      adj->ipv6_addrs->del = del_addr;
-      list_delete (adj->ipv6_addrs);
-    }
-  adj->ipv6_addrs = list_new ();
-  if (tlvs->ipv6_addrs)
-    {
-      for (ALL_LIST_ELEMENTS_RO (tlvs->ipv6_addrs, node, ipv6_addr))
-      {
-	malloced = XMALLOC (MTYPE_ISIS_TMP, sizeof (struct in6_addr));
-	memcpy (malloced, ipv6_addr, sizeof (struct in6_addr));
-	listnode_add (adj->ipv6_addrs, malloced);
-      }
-    }
-
-}
-
-/*
  *  RECEIVE SIDE                           
  */
 
@@ -328,14 +204,6 @@ tlvs_to_adj_ipv6_addrs (struct tlvs *tlvs, struct isis_adjacency *adj)
 static int
 process_p2p_hello (struct isis_circuit *circuit)
 {
-  int retval = ISIS_OK;
-  struct isis_p2p_hello_hdr *hdr;
-  struct isis_adjacency *adj;
-  u_int32_t expected = 0, found = 0, auth_tlv_offset = 0;
-  uint16_t pdu_len;
-  struct tlvs tlvs;
-  int v4_usable = 0, v6_usable = 0;
-
   if (isis->debugs & DEBUG_ADJ_PACKETS)
     {
       zlog_debug ("ISIS-Adj (%s): Rcvd P2P IIH on %s, cirType %s, cirID %u",
@@ -352,31 +220,15 @@ process_p2p_hello (struct isis_circuit *circuit)
       return ISIS_WARNING;
     }
 
-  if ((stream_get_endp (circuit->rcv_stream) -
-       stream_get_getp (circuit->rcv_stream)) < ISIS_P2PHELLO_HDRLEN)
-    {
-      zlog_warn ("Packet too short");
-      return ISIS_WARNING;
-    }
+  /* Generic IIH Header */
+  uint8_t rem_circ_type = stream_getc(circuit->rcv_stream) & 0x03;
+  uint8_t rem_sys_id[ISIS_SYS_ID_LEN];
+  stream_get(rem_sys_id, circuit->rcv_stream, ISIS_SYS_ID_LEN);
+  uint16_t rem_holdtime = stream_getw(circuit->rcv_stream);
+  uint16_t pdu_len = stream_getw(circuit->rcv_stream);
 
-  /* 8.2.5.1 PDU acceptance tests */
-
-  /* 8.2.5.1 a) external domain untrue */
-  /* FIXME: not useful at all?         */
-
-  /* 8.2.5.1 b) ID Length mismatch */
-  /* checked at the handle_pdu     */
-
-  /* 8.2.5.2 IIH PDU Processing */
-
-  /* 8.2.5.2 a) 1) Maximum Area Addresses */
-  /* Already checked, and can also be ommited */
-
-  /*
-   * Get the header
-   */
-  hdr = (struct isis_p2p_hello_hdr *) STREAM_PNT (circuit->rcv_stream);
-  pdu_len = ntohs (hdr->pdu_len);
+  /* P2P IIH Specific */
+  stream_forward_getp(circuit->rcv_stream, 1); /* Remote circuit id */
 
   if (pdu_len < (ISIS_FIXED_HDR_LEN + ISIS_P2PHELLO_HDRLEN) ||
       pdu_len > ISO_MTU(circuit) ||
@@ -395,134 +247,81 @@ process_p2p_hello (struct isis_circuit *circuit)
   if (pdu_len < stream_get_endp (circuit->rcv_stream))
     stream_set_endp (circuit->rcv_stream, pdu_len);
 
-  stream_forward_getp (circuit->rcv_stream, ISIS_P2PHELLO_HDRLEN);
+  struct isis_tlvs *tlvs;
+  const char *error_log;
+  int retval = ISIS_WARNING;
 
-  /*
-   * Lets get the TLVS now
-   */
-  expected |= TLVFLAG_AREA_ADDRS;
-  expected |= TLVFLAG_AUTH_INFO;
-  expected |= TLVFLAG_NLPID;
-  expected |= TLVFLAG_IPV4_ADDR;
-  expected |= TLVFLAG_IPV6_ADDR;
-  expected |= TLVFLAG_MT_ROUTER_INFORMATION;
-
-  auth_tlv_offset = stream_get_getp (circuit->rcv_stream);
-  retval = parse_tlvs (circuit->area->area_tag,
-		       STREAM_PNT (circuit->rcv_stream),
-		       pdu_len - ISIS_P2PHELLO_HDRLEN - ISIS_FIXED_HDR_LEN,
-                       &expected, &found, &tlvs, &auth_tlv_offset);
-
-  if (retval > ISIS_WARNING)
+  if (isis_unpack_tlvs(STREAM_READABLE(circuit->rcv_stream), circuit->rcv_stream,
+                       &tlvs, &error_log))
     {
-      zlog_warn ("parse_tlvs() failed");
-      free_tlvs (&tlvs);
-      return retval;
-    };
+      zlog_warn("isis_unpack_tlvs() failed: %s", error_log);
+      goto out;
+    }
 
-  if (!(found & TLVFLAG_AREA_ADDRS))
+  if (!tlvs->area_addresses.count)
     {
       zlog_warn ("No Area addresses TLV in P2P IS to IS hello");
-      free_tlvs (&tlvs);
-      return ISIS_WARNING;
+      goto out;
     }
 
-  if (!(found & TLVFLAG_NLPID))
+  if (!tlvs->protocols_supported.count)
     {
       zlog_warn ("No supported protocols TLV in P2P IS to IS hello");
-      free_tlvs (&tlvs);
-      return ISIS_WARNING;
+      goto out;
     }
 
-  /* 8.2.5.1 c) Authentication */
-  if (circuit->passwd.type)
+  if (!isis_tlvs_auth_is_valid(tlvs, &circuit->passwd, circuit->rcv_stream))
     {
-      if (!(found & TLVFLAG_AUTH_INFO) ||
-          authentication_check (&tlvs.auth_info, &circuit->passwd,
-                                circuit->rcv_stream, auth_tlv_offset))
-        {
-          isis_event_auth_failure (circuit->area->area_tag,
-                                   "P2P hello authentication failure",
-                                   hdr->source_id);
-          free_tlvs (&tlvs);
-          return ISIS_OK;
-        }
+      isis_event_auth_failure (circuit->area->area_tag,
+                               "P2P hello authentication failure",
+                               rem_sys_id);
+      goto out;
     }
 
-  /*
-   * check if both ends have an IPv4 address
-   */
-  if (circuit->ip_addrs && listcount(circuit->ip_addrs)
-      && tlvs.ipv4_addrs && listcount(tlvs.ipv4_addrs))
-    {
-      v4_usable = 1;
-    }
-
-  if (found & TLVFLAG_IPV6_ADDR)
-    {
-      /* TBA: check that we have a linklocal ourselves? */
-      struct listnode *node;
-      struct in6_addr *ip;
-      for (ALL_LIST_ELEMENTS_RO (tlvs.ipv6_addrs, node, ip))
-	if (IN6_IS_ADDR_LINKLOCAL (ip))
-	  {
-	    v6_usable = 1;
-	    break;
-	  }
-
-      if (!v6_usable)
-	zlog_warn ("ISIS-Adj: IPv6 addresses present but no link-local "
-		   "in P2P IIH from %s\n", circuit->interface->name);
-    }
-
-  if (!(found & (TLVFLAG_IPV4_ADDR | TLVFLAG_IPV6_ADDR)))
-    zlog_warn ("ISIS-Adj: neither IPv4 nor IPv6 addr in P2P IIH from %s\n",
-	       circuit->interface->name);
-
-  if (!v6_usable && !v4_usable)
-    {
-      free_tlvs (&tlvs);
-      return ISIS_WARNING;
-    }
-
-  /*
-   * it's own p2p IIH PDU - discard
-   */
-  if (!memcmp (hdr->source_id, isis->sysid, ISIS_SYS_ID_LEN))
+  if (!memcmp(rem_sys_id, isis->sysid, ISIS_SYS_ID_LEN))
     {
       zlog_warn ("ISIS-Adj (%s): it's own IIH PDU - discarded",
                   circuit->area->area_tag);
-      free_tlvs (&tlvs);
-      return ISIS_WARNING;
+      goto out;
     }
+
+  bool v4_usable = false, v6_usable = false;
+
+  if (circuit->ip_addrs && listcount(circuit->ip_addrs) && tlvs->ipv4_address.count)
+    v4_usable = true;
+
+  if (circuit->ipv6_link && listcount(circuit->ipv6_link) && tlvs->ipv6_address.count)
+    v6_usable = true;
+
+  if (!v6_usable && !v4_usable)
+    goto out;
 
   /*
    * My interpertation of the ISO, if no adj exists we will create one for
    * the circuit
    */
-  adj = circuit->u.p2p.neighbor;
+  struct isis_adjacency *adj = circuit->u.p2p.neighbor;
   /* If an adjacency exists, check it is with the source of the hello
    * packets */
   if (adj)
     {
-      if (memcmp(hdr->source_id, adj->sysid, ISIS_SYS_ID_LEN))
+      if (memcmp(rem_sys_id, adj->sysid, ISIS_SYS_ID_LEN))
 	{
           zlog_debug("hello source and adjacency do not match, set adj down\n");
           isis_adj_state_change (adj, ISIS_ADJ_DOWN, "adj do not exist");
-          return 0;
+          retval = ISIS_OK;
+          goto out;
         }
     }
-  if (!adj || adj->level != hdr->circuit_t)
+  if (!adj || adj->level != rem_circ_type)
     {
       if (!adj)
         {
-          adj = isis_new_adj (hdr->source_id, NULL, hdr->circuit_t, circuit);
-          if (adj == NULL)
-            return ISIS_ERROR;
+          adj = isis_new_adj (rem_sys_id, NULL, rem_circ_type, circuit);
         }
       else
         {
-          adj->level = hdr->circuit_t;
+          adj->level = rem_circ_type;
         }
       circuit->u.p2p.neighbor = adj;
       /* Build lsp with the new neighbor entry when a new
@@ -531,42 +330,24 @@ process_p2p_hello (struct isis_circuit *circuit)
        * when an adjacency is up. This will result in the new
        * adjacency entry getting added to the lsp tlv neighbor list.
        */
-      adj->circuit_t = hdr->circuit_t;
+      adj->circuit_t = rem_circ_type;
       isis_adj_state_change (adj, ISIS_ADJ_INITIALIZING, NULL);
       adj->sys_type = ISIS_SYSTYPE_UNKNOWN;
     }
 
   /* 8.2.6 Monitoring point-to-point adjacencies */
-  adj->hold_time = ntohs (hdr->hold_time);
+  adj->hold_time = rem_holdtime;
   adj->last_upd = time (NULL);
 
-  /* we do this now because the adj may not survive till the end... */
-  tlvs_to_adj_area_addrs (&tlvs, adj);
-
-  /* which protocol are spoken ??? */
-  if (tlvs_to_adj_nlpids (&tlvs, adj))
-    {
-      free_tlvs (&tlvs);
-      return ISIS_WARNING;
-    }
-
-  /* we need to copy addresses to the adj */
-  if (found & TLVFLAG_IPV4_ADDR)
-    tlvs_to_adj_ipv4_addrs (&tlvs, adj);
+  bool changed;
+  isis_tlvs_to_adj(tlvs, adj, &changed);
+  changed |= tlvs_to_adj_mt_set(tlvs, v4_usable, v6_usable, adj);
 
   /* Update MPLS TE Remote IP address parameter if possible */
   if (IS_MPLS_TE(isisMplsTE) && circuit->mtc && IS_CIRCUIT_TE(circuit->mtc))
-    if (adj->ipv4_addrs != NULL && listcount(adj->ipv4_addrs) != 0)
-      {
-        struct in_addr *ip_addr;
-        ip_addr = (struct in_addr *)listgetdata ((struct listnode *)listhead (adj->ipv4_addrs));
-        set_circuitparams_rmt_ipaddr (circuit->mtc, *ip_addr);
-      }
+    if (adj->ipv4_address_count)
+      set_circuitparams_rmt_ipaddr (circuit->mtc, adj->ipv4_addresses[0]);
 
-  if (found & TLVFLAG_IPV6_ADDR)
-    tlvs_to_adj_ipv6_addrs (&tlvs, adj);
-
-  bool mt_set_changed = tlvs_to_adj_mt_set(&tlvs, v4_usable, v6_usable, adj);
 
   /* lets take care of the expiry */
   THREAD_TIMER_OFF (adj->t_expire);
@@ -574,12 +355,12 @@ process_p2p_hello (struct isis_circuit *circuit)
                    &adj->t_expire);
 
   /* 8.2.5.2 a) a match was detected */
-  if (area_match (circuit->area->area_addrs, tlvs.area_addrs))
+  if (isis_tlvs_area_addresses_match(tlvs, circuit->area->area_addrs))
     {
       /* 8.2.5.2 a) 2) If the system is L1 - table 5 */
       if (circuit->area->is_type == IS_LEVEL_1)
 	{
-	  switch (hdr->circuit_t)
+	  switch (rem_circ_type)
 	    {
 	    case IS_LEVEL_1:
 	    case IS_LEVEL_1_AND_2:
@@ -600,8 +381,7 @@ process_p2p_hello (struct isis_circuit *circuit)
 		{
 		  /* (7) reject - wrong system type event */
 		  zlog_warn ("wrongSystemType");
-                  free_tlvs (&tlvs);
-		  return ISIS_WARNING;	/* Reject */
+		  goto out;
 		}
 	      else if (adj->adj_usage == ISIS_ADJ_LEVEL1)
 		{
@@ -615,7 +395,7 @@ process_p2p_hello (struct isis_circuit *circuit)
       /* 8.2.5.2 a) 3) If the system is L1L2 - table 6 */
       if (circuit->area->is_type == IS_LEVEL_1_AND_2)
 	{
-	  switch (hdr->circuit_t)
+	  switch (rem_circ_type)
 	    {
 	    case IS_LEVEL_1:
 	      if (adj->adj_state != ISIS_ADJ_UP)
@@ -680,15 +460,14 @@ process_p2p_hello (struct isis_circuit *circuit)
       /* 8.2.5.2 a) 4) If the system is L2 - table 7 */
       if (circuit->area->is_type == IS_LEVEL_2)
 	{
-	  switch (hdr->circuit_t)
+	  switch (rem_circ_type)
 	    {
 	    case IS_LEVEL_1:
 	      if (adj->adj_state != ISIS_ADJ_UP)
 		{
 		  /* (5) reject - wrong system type event */
 		  zlog_warn ("wrongSystemType");
-                  free_tlvs (&tlvs);
-		  return ISIS_WARNING;	/* Reject */
+		  goto out;
 		}
 	      else if ((adj->adj_usage == ISIS_ADJ_LEVEL1AND2) ||
 		       (adj->adj_usage == ISIS_ADJ_LEVEL2))
@@ -739,15 +518,14 @@ process_p2p_hello (struct isis_circuit *circuit)
       /* 8.2.5.2 b 3 If the system is L2 or L1L2 - table 8 */
       else
 	{
-	  switch (hdr->circuit_t)
+	  switch (rem_circ_type)
 	    {
 	    case IS_LEVEL_1:
 	      if (adj->adj_state != ISIS_ADJ_UP)
 		{
 		  /* (6) reject - Area Mismatch event */
 		  zlog_warn ("AreaMismatch");
-                  free_tlvs (&tlvs);
-		  return ISIS_WARNING;	/* Reject */
+		  goto out;
 		}
 	      else if (adj->adj_usage == ISIS_ADJ_LEVEL1)
 		{
@@ -778,7 +556,7 @@ process_p2p_hello (struct isis_circuit *circuit)
 		}
 	      else if (adj->adj_usage == ISIS_ADJ_LEVEL1AND2)
 		{
-		  if (hdr->circuit_t == IS_LEVEL_2)
+		  if (rem_circ_type == IS_LEVEL_2)
 		    {
 		      /* (7) down - wrong system */
 		      isis_adj_state_change (adj, ISIS_ADJ_DOWN,
@@ -805,7 +583,7 @@ process_p2p_hello (struct isis_circuit *circuit)
       isis_adj_state_change (adj, ISIS_ADJ_DOWN, "Area Mismatch");
     }
 
-  if (adj->adj_state == ISIS_ADJ_UP && mt_set_changed)
+  if (adj->adj_state == ISIS_ADJ_UP && changed)
     {
       lsp_regenerate_schedule(adj->circuit->area,
                               isis_adj_usage2levels(adj->adj_usage), 0);
@@ -843,7 +621,9 @@ process_p2p_hello (struct isis_circuit *circuit)
 		  circuit->circuit_id, pdu_len);
     }
 
-  free_tlvs (&tlvs);
+  retval = ISIS_OK;
+out:
+  isis_free_tlvs(tlvs);
 
   return retval;
 }
@@ -854,15 +634,6 @@ process_p2p_hello (struct isis_circuit *circuit)
 static int
 process_lan_hello (int level, struct isis_circuit *circuit, const u_char *ssnpa)
 {
-  int retval = ISIS_OK;
-  struct isis_lan_hello_hdr hdr;
-  struct isis_adjacency *adj;
-  u_int32_t expected = 0, found = 0, auth_tlv_offset = 0;
-  struct tlvs tlvs;
-  u_char *snpa;
-  struct listnode *node;
-  int v4_usable = 0, v6_usable = 0;
-
   if (isis->debugs & DEBUG_ADJ_PACKETS)
     {
       zlog_debug ("ISIS-Adj (%s): Rcvd L%d LAN IIH on %s, cirType %s, "
@@ -877,13 +648,6 @@ process_lan_hello (int level, struct isis_circuit *circuit, const u_char *ssnpa)
   if (circuit->circ_type != CIRCUIT_T_BROADCAST)
     {
       zlog_warn ("lan hello on non broadcast circuit");
-      return ISIS_WARNING;
-    }
-
-  if ((stream_get_endp (circuit->rcv_stream) -
-       stream_get_getp (circuit->rcv_stream)) < ISIS_LANHELLO_HDRLEN)
-    {
-      zlog_warn ("Packet too short");
       return ISIS_WARNING;
     }
 
@@ -904,36 +668,26 @@ process_lan_hello (int level, struct isis_circuit *circuit, const u_char *ssnpa)
       return ISIS_WARNING;
     }
 
-#if 0
-  /* Cisco's debug message compatability */
-  if (!accept_level (level, circuit->area->is_type))
-    {
-      if (isis->debugs & DEBUG_ADJ_PACKETS)
-	{
-	  zlog_debug ("ISIS-Adj (%s): is type mismatch",
-		      circuit->area->area_tag);
-	}
-      return ISIS_WARNING;
-    }
-#endif
-  /*
-   * Fill the header
-   */
-  hdr.circuit_t = stream_getc (circuit->rcv_stream);
-  stream_get (hdr.source_id, circuit->rcv_stream, ISIS_SYS_ID_LEN);
-  hdr.hold_time = stream_getw (circuit->rcv_stream);
-  hdr.pdu_len = stream_getw (circuit->rcv_stream);
-  hdr.prio = stream_getc (circuit->rcv_stream);
-  stream_get (hdr.lan_id, circuit->rcv_stream, ISIS_SYS_ID_LEN + 1);
+  /* Genric IIH Header */
+  uint8_t rem_circ_type = stream_getc(circuit->rcv_stream) & 0x03;
+  uint8_t rem_sys_id[ISIS_SYS_ID_LEN];
+  stream_get(rem_sys_id, circuit->rcv_stream, ISIS_SYS_ID_LEN);
+  uint16_t rem_holdtime = stream_getw(circuit->rcv_stream);
+  uint16_t pdu_len = stream_getw(circuit->rcv_stream);
 
-  if (hdr.pdu_len < (ISIS_FIXED_HDR_LEN + ISIS_LANHELLO_HDRLEN) ||
-      hdr.pdu_len > ISO_MTU(circuit) ||
-      hdr.pdu_len > stream_get_endp (circuit->rcv_stream))
+  /* LAN IIH Specific */
+  uint8_t rem_priority = stream_getc(circuit->rcv_stream);
+  uint8_t rem_dis[ISIS_SYS_ID_LEN + 1];
+  stream_get(rem_dis, circuit->rcv_stream, ISIS_SYS_ID_LEN + 1);
+
+  if (pdu_len < (ISIS_FIXED_HDR_LEN + ISIS_LANHELLO_HDRLEN) ||
+      pdu_len > ISO_MTU(circuit) ||
+      pdu_len > stream_get_endp (circuit->rcv_stream))
     {
       zlog_warn ("ISIS-Adj (%s): Rcvd LAN IIH from (%s) with "
-                 "invalid pdu length %d",
+                 "invalid pdu length %" PRIu16,
                  circuit->area->area_tag, circuit->interface->name,
-                 hdr.pdu_len);
+                 pdu_len);
       return ISIS_WARNING;
     }
 
@@ -941,44 +695,29 @@ process_lan_hello (int level, struct isis_circuit *circuit, const u_char *ssnpa)
    * Set the stream endp to PDU length, ignoring additional padding
    * introduced by transport chips.
    */
-  if (hdr.pdu_len < stream_get_endp (circuit->rcv_stream))
-    stream_set_endp (circuit->rcv_stream, hdr.pdu_len);
+  if (pdu_len < stream_get_endp(circuit->rcv_stream))
+    stream_set_endp(circuit->rcv_stream, pdu_len);
 
-  if (hdr.circuit_t != IS_LEVEL_1 &&
-      hdr.circuit_t != IS_LEVEL_2 &&
-      hdr.circuit_t != IS_LEVEL_1_AND_2 &&
-      (level & hdr.circuit_t) == 0)
+  if (!(level & rem_circ_type))
     {
       zlog_err ("Level %d LAN Hello with Circuit Type %d", level,
-                hdr.circuit_t);
+                rem_circ_type);
       return ISIS_ERROR;
     }
 
-  /*
-   * Then get the tlvs
-   */
-  expected |= TLVFLAG_AUTH_INFO;
-  expected |= TLVFLAG_AREA_ADDRS;
-  expected |= TLVFLAG_LAN_NEIGHS;
-  expected |= TLVFLAG_NLPID;
-  expected |= TLVFLAG_IPV4_ADDR;
-  expected |= TLVFLAG_IPV6_ADDR;
-  expected |= TLVFLAG_MT_ROUTER_INFORMATION;
+  struct isis_tlvs *tlvs;
+  const char *error_log;
+  int retval = ISIS_OK;
 
-  auth_tlv_offset = stream_get_getp (circuit->rcv_stream);
-  retval = parse_tlvs (circuit->area->area_tag,
-                       STREAM_PNT (circuit->rcv_stream),
-                       hdr.pdu_len - ISIS_LANHELLO_HDRLEN - ISIS_FIXED_HDR_LEN,
-                       &expected, &found, &tlvs,
-                       &auth_tlv_offset);
-
-  if (retval > ISIS_WARNING)
+  if (isis_unpack_tlvs(STREAM_READABLE(circuit->rcv_stream), circuit->rcv_stream,
+                       &tlvs, &error_log))
     {
-      zlog_warn ("parse_tlvs() failed");
+      zlog_warn ("isis_unpack_tlvs() failed: %s", error_log);
+      retval = ISIS_WARNING;
       goto out;
     }
 
-  if (!(found & TLVFLAG_AREA_ADDRS))
+  if (!tlvs->area_addresses.count)
     {
       zlog_warn ("No Area addresses TLV in Level %d LAN IS to IS hello",
 		 level);
@@ -986,7 +725,7 @@ process_lan_hello (int level, struct isis_circuit *circuit, const u_char *ssnpa)
       goto out;
     }
 
-  if (!(found & TLVFLAG_NLPID))
+  if (!tlvs->protocols_supported.count)
     {
       zlog_warn ("No supported protocols TLV in Level %d LAN IS to IS hello",
 		 level);
@@ -994,26 +733,21 @@ process_lan_hello (int level, struct isis_circuit *circuit, const u_char *ssnpa)
       goto out;
     }
 
-  /* Verify authentication, either cleartext of HMAC MD5 */
-  if (circuit->passwd.type)
+  if (!isis_tlvs_auth_is_valid(tlvs, &circuit->passwd, circuit->rcv_stream))
     {
-      if (!(found & TLVFLAG_AUTH_INFO) ||
-          authentication_check (&tlvs.auth_info, &circuit->passwd,
-                                circuit->rcv_stream, auth_tlv_offset))
-        {
-          isis_event_auth_failure (circuit->area->area_tag,
-                                   "LAN hello authentication failure",
-                                   hdr.source_id);
-          retval = ISIS_WARNING;
-          goto out;
-        }
+      isis_event_auth_failure (circuit->area->area_tag,
+                               "LAN hello authentication failure",
+                               rem_sys_id);
+      retval = ISIS_WARNING;
+      goto out;
     }
 
-  if (!memcmp (hdr.source_id, isis->sysid, ISIS_SYS_ID_LEN))
+  if (!memcmp(rem_sys_id, isis->sysid, ISIS_SYS_ID_LEN))
     {
       zlog_warn ("ISIS-Adj (%s): duplicate system ID on interface %s",
-		 circuit->area->area_tag, circuit->interface->name);
-      return ISIS_WARNING;
+                 circuit->area->area_tag, circuit->interface->name);
+      retval = ISIS_WARNING;
+      goto out;
     }
 
   /*
@@ -1021,8 +755,8 @@ process_lan_hello (int level, struct isis_circuit *circuit, const u_char *ssnpa)
    * remote area addresses is found
    */
   if (listcount (circuit->area->area_addrs) == 0 ||
-      (level == IS_LEVEL_1 &&
-       area_match (circuit->area->area_addrs, tlvs.area_addrs) == 0))
+      (level == IS_LEVEL_1
+       && !isis_tlvs_area_addresses_match(tlvs, circuit->area->area_addrs)))
     {
       if (isis->debugs & DEBUG_ADJ_PACKETS)
 	{
@@ -1034,56 +768,22 @@ process_lan_hello (int level, struct isis_circuit *circuit, const u_char *ssnpa)
       goto out;
     }
 
-  /* 
-   * it's own IIH PDU - discard silently 
-   */
-  if (!memcmp (circuit->u.bc.snpa, ssnpa, ETH_ALEN))
-    {
-      zlog_debug ("ISIS-Adj (%s): it's own IIH PDU - discarded",
-		  circuit->area->area_tag);
+  bool v4_usable = false, v6_usable = false;
 
-      retval = ISIS_OK;
-      goto out;
-    }
+  if (circuit->ip_addrs && listcount(circuit->ip_addrs) && tlvs->ipv4_address.count)
+    v4_usable = true;
 
-  /*
-   * check if both ends have an IPv4 address
-   */
-  if (circuit->ip_addrs && listcount(circuit->ip_addrs)
-      && tlvs.ipv4_addrs && listcount(tlvs.ipv4_addrs))
-    {
-      v4_usable = 1;
-    }
-
-  if (found & TLVFLAG_IPV6_ADDR)
-    {
-      /* TBA: check that we have a linklocal ourselves? */
-      struct listnode *node;
-      struct in6_addr *ip;
-      for (ALL_LIST_ELEMENTS_RO (tlvs.ipv6_addrs, node, ip))
-	if (IN6_IS_ADDR_LINKLOCAL (ip))
-	  {
-	    v6_usable = 1;
-	    break;
-	  }
-
-      if (!v6_usable)
-	zlog_warn ("ISIS-Adj: IPv6 addresses present but no link-local "
-		   "in LAN IIH from %s\n", circuit->interface->name);
-    }
-
-  if (!(found & (TLVFLAG_IPV4_ADDR | TLVFLAG_IPV6_ADDR)))
-    zlog_warn ("ISIS-Adj: neither IPv4 nor IPv6 addr in LAN IIH from %s\n",
-	       circuit->interface->name);
+  if (circuit->ipv6_link && listcount(circuit->ipv6_link) && tlvs->ipv6_address.count)
+    v6_usable = true;
 
   if (!v6_usable && !v4_usable)
     {
-      free_tlvs (&tlvs);
+      isis_free_tlvs(tlvs);
       return ISIS_WARNING;
     }
 
-
-  adj = isis_adj_lookup (hdr.source_id, circuit->u.bc.adjdb[level - 1]);
+  struct isis_adjacency *adj;
+  adj = isis_adj_lookup (rem_sys_id, circuit->u.bc.adjdb[level - 1]);
   if ((adj == NULL) || (memcmp(adj->snpa, ssnpa, ETH_ALEN)) ||
       (adj->level != level))
     {
@@ -1092,7 +792,7 @@ process_lan_hello (int level, struct isis_circuit *circuit, const u_char *ssnpa)
           /*
            * Do as in 8.4.2.5
            */
-          adj = isis_new_adj (hdr.source_id, ssnpa, level, circuit);
+          adj = isis_new_adj (rem_sys_id, ssnpa, level, circuit);
           if (adj == NULL)
             {
               retval = ISIS_ERROR;
@@ -1123,50 +823,34 @@ process_lan_hello (int level, struct isis_circuit *circuit, const u_char *ssnpa)
     switch (level)
       {
       case 1:
-	if (memcmp (circuit->u.bc.l1_desig_is, hdr.lan_id, ISIS_SYS_ID_LEN + 1))
+	if (memcmp (circuit->u.bc.l1_desig_is, rem_dis, ISIS_SYS_ID_LEN + 1))
 	  {
             thread_add_event(master, isis_event_dis_status_change, circuit, 0,
                              NULL);
-	    memcpy (&circuit->u.bc.l1_desig_is, hdr.lan_id,
+	    memcpy (&circuit->u.bc.l1_desig_is, rem_dis,
 		    ISIS_SYS_ID_LEN + 1);
 	  }
 	break;
       case 2:
-	if (memcmp (circuit->u.bc.l2_desig_is, hdr.lan_id, ISIS_SYS_ID_LEN + 1))
+	if (memcmp (circuit->u.bc.l2_desig_is, rem_dis, ISIS_SYS_ID_LEN + 1))
 	  {
             thread_add_event(master, isis_event_dis_status_change, circuit, 0,
                              NULL);
-	    memcpy (&circuit->u.bc.l2_desig_is, hdr.lan_id,
+	    memcpy (&circuit->u.bc.l2_desig_is, rem_dis,
 		    ISIS_SYS_ID_LEN + 1);
 	  }
 	break;
       }
 
-  adj->hold_time = hdr.hold_time;
+  adj->circuit_t = rem_circ_type;
+  adj->hold_time = rem_holdtime;
   adj->last_upd = time (NULL);
-  adj->prio[level - 1] = hdr.prio;
+  adj->prio[level - 1] = rem_priority;
+  memcpy (adj->lanid, rem_dis, ISIS_SYS_ID_LEN + 1);
 
-  memcpy (adj->lanid, hdr.lan_id, ISIS_SYS_ID_LEN + 1);
-
-  tlvs_to_adj_area_addrs (&tlvs, adj);
-
-  /* which protocol are spoken ??? */
-  if (tlvs_to_adj_nlpids (&tlvs, adj))
-    {
-      retval = ISIS_WARNING;
-      goto out;
-    }
-
-  /* we need to copy addresses to the adj */
-  if (found & TLVFLAG_IPV4_ADDR)
-    tlvs_to_adj_ipv4_addrs (&tlvs, adj);
-
-  if (found & TLVFLAG_IPV6_ADDR)
-    tlvs_to_adj_ipv6_addrs (&tlvs, adj);
-
-  adj->circuit_t = hdr.circuit_t;
-
-  bool mt_set_changed = tlvs_to_adj_mt_set(&tlvs, v4_usable, v6_usable, adj);
+  bool changed;
+  isis_tlvs_to_adj(tlvs, adj, &changed);
+  changed |= tlvs_to_adj_mt_set(tlvs, v4_usable, v6_usable, adj);
 
   /* lets take care of the expiry */
   THREAD_TIMER_OFF (adj->t_expire);
@@ -1178,40 +862,24 @@ process_lan_hello (int level, struct isis_circuit *circuit, const u_char *ssnpa)
    * we have two-way communication -> adjacency can be put to state "up"
    */
 
-  if (found & TLVFLAG_LAN_NEIGHS)
-  {
-    if (adj->adj_state != ISIS_ADJ_UP)
+  if (adj->adj_state != ISIS_ADJ_UP)
     {
-      for (ALL_LIST_ELEMENTS_RO (tlvs.lan_neighs, node, snpa))
-      {
-        if (!memcmp (snpa, circuit->u.bc.snpa, ETH_ALEN))
+      if (isis_tlvs_own_snpa_found(tlvs, circuit->u.bc.snpa))
         {
           isis_adj_state_change (adj, ISIS_ADJ_UP,
                                  "own SNPA found in LAN Neighbours TLV");
         }
-      }
     }
-    else
+  else
     {
-      int found = 0;
-      for (ALL_LIST_ELEMENTS_RO (tlvs.lan_neighs, node, snpa))
-        if (!memcmp (snpa, circuit->u.bc.snpa, ETH_ALEN))
+      if (!isis_tlvs_own_snpa_found(tlvs, circuit->u.bc.snpa))
         {
-          found = 1;
-          break;
+          isis_adj_state_change (adj, ISIS_ADJ_INITIALIZING,
+                                 "own SNPA not found in LAN Neighbours TLV");
         }
-      if (found == 0)
-        isis_adj_state_change (adj, ISIS_ADJ_INITIALIZING,
-                               "own SNPA not found in LAN Neighbours TLV");
     }
-  }
-  else if (adj->adj_state == ISIS_ADJ_UP)
-  {
-    isis_adj_state_change (adj, ISIS_ADJ_INITIALIZING,
-                           "no LAN Neighbours TLV found");
-  }
 
-  if (adj->adj_state == ISIS_ADJ_UP && mt_set_changed)
+  if (adj->adj_state == ISIS_ADJ_UP && changed)
     lsp_regenerate_schedule(adj->circuit->area, level, 0);
 
 out:
@@ -1226,7 +894,7 @@ out:
 		  stream_get_endp (circuit->rcv_stream));
     }
 
-  free_tlvs (&tlvs);
+  isis_free_tlvs(tlvs);
 
   return retval;
 }

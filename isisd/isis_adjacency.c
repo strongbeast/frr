@@ -71,12 +71,6 @@ isis_new_adj (const u_char * id, const u_char * snpa, int level,
 
   adj = adj_alloc (id);		/* P2P kludge */
 
-  if (adj == NULL)
-    {
-      zlog_err ("Out of memory!");
-      return NULL;
-    }
-
   if (snpa) {
     memcpy (adj->snpa, snpa, ETH_ALEN);
   } else {
@@ -142,12 +136,12 @@ isis_delete_adj (void *arg)
   /* remove from SPF trees */
   spftree_area_adj_del (adj->circuit->area, adj);
 
-  if (adj->area_addrs)
-    list_delete (adj->area_addrs);
-  if (adj->ipv4_addrs)
-    list_delete (adj->ipv4_addrs);
-  if (adj->ipv6_addrs)
-    list_delete (adj->ipv6_addrs);
+  if (adj->area_addresses)
+    XFREE(MTYPE_ISIS_ADJACENCY_INFO, adj->area_addresses);
+  if (adj->ipv4_addresses)
+    XFREE(MTYPE_ISIS_ADJACENCY_INFO, adj->ipv4_addresses);
+  if (adj->ipv6_addresses)
+    XFREE(MTYPE_ISIS_ADJACENCY_INFO, adj->ipv6_addresses);
 
   adj_mt_finish(adj);
 
@@ -313,10 +307,6 @@ void
 isis_adj_print (struct isis_adjacency *adj)
 {
   struct isis_dynhn *dyn;
-  struct listnode *node;
-  struct in_addr *ipv4_addr;
-  struct in6_addr *ipv6_addr;
-  u_char ip6[INET6_ADDRSTRLEN];
 
   if (!adj)
     return;
@@ -327,22 +317,22 @@ isis_adj_print (struct isis_adjacency *adj)
   zlog_debug ("SystemId %20s SNPA %s, level %d\nHolding Time %d",
               sysid_print (adj->sysid), snpa_print (adj->snpa),
               adj->level, adj->hold_time);
-  if (adj->ipv4_addrs && listcount (adj->ipv4_addrs) > 0)
+  if (adj->ipv4_address_count)
     {
       zlog_debug ("IPv4 Address(es):");
-
-      for (ALL_LIST_ELEMENTS_RO (adj->ipv4_addrs, node, ipv4_addr))
-        zlog_debug ("%s", inet_ntoa (*ipv4_addr));
+      for (unsigned int i = 0; i < adj->ipv4_address_count; i++)
+        zlog_debug ("%s", inet_ntoa(adj->ipv4_addresses[i]));
     }
 
-  if (adj->ipv6_addrs && listcount (adj->ipv6_addrs) > 0)
+  if (adj->ipv6_address_count)
     {
       zlog_debug ("IPv6 Address(es):");
-      for (ALL_LIST_ELEMENTS_RO (adj->ipv6_addrs, node, ipv6_addr))
-	{
-	  inet_ntop (AF_INET6, ipv6_addr, (char *)ip6, INET6_ADDRSTRLEN);
-	  zlog_debug ("%s", ip6);
-	}
+      for (unsigned int i = 0; i < adj->ipv6_address_count; i++)
+        {
+          char buf[INET6_ADDRSTRLEN];
+          inet_ntop (AF_INET6, &adj->ipv6_addresses[i], buf, sizeof(buf));
+          zlog_debug ("%s", buf);
+        }
     }
   zlog_debug ("Speaks: %s", nlpid2string (&adj->nlpids));
 
@@ -373,13 +363,9 @@ isis_adj_expire (struct thread *thread)
 void
 isis_adj_print_vty (struct isis_adjacency *adj, struct vty *vty, char detail)
 {
-  struct in6_addr *ipv6_addr;
-  u_char ip6[INET6_ADDRSTRLEN];
-  struct in_addr *ip_addr;
   time_t now;
   struct isis_dynhn *dyn;
   int level;
-  struct listnode *node;
 
   dyn = dynhn_find_by_id (adj->sysid);
   if (dyn)
@@ -457,27 +443,31 @@ isis_adj_print_vty (struct isis_adjacency *adj, struct vty *vty, char detail)
       }
       vty_out (vty, VTYNL);
 
-      if (adj->area_addrs && listcount (adj->area_addrs) > 0)
+      if (adj->area_address_count)
         {
-          struct area_addr *area_addr;
           vty_outln (vty, "    Area Address(es):");
-          for (ALL_LIST_ELEMENTS_RO (adj->area_addrs, node, area_addr))
-            vty_outln (vty, "      %s",
-                       isonet_print(area_addr->area_addr, area_addr->addr_len));
+          for (unsigned int i = 0; i < adj->area_address_count; i++)
+            {
+              vty_outln (vty, "      %s",
+                       isonet_print (adj->area_addresses[i].area_addr,
+                       adj->area_addresses[i].addr_len));
+            }
         }
-      if (adj->ipv4_addrs && listcount (adj->ipv4_addrs) > 0)
+      if (adj->ipv4_address_count)
 	{
 	  vty_outln (vty, "    IPv4 Address(es):");
-	  for (ALL_LIST_ELEMENTS_RO (adj->ipv4_addrs, node, ip_addr))
-            vty_outln (vty, "      %s", inet_ntoa(*ip_addr));
+	  for (unsigned int i = 0; i < adj->ipv4_address_count; i++)
+            vty_outln (vty, "      %s",
+                     inet_ntoa(adj->ipv4_addresses[i]));
 	}
-      if (adj->ipv6_addrs && listcount (adj->ipv6_addrs) > 0)
+      if (adj->ipv6_address_count)
 	{
 	  vty_outln (vty, "    IPv6 Address(es):");
-	  for (ALL_LIST_ELEMENTS_RO (adj->ipv6_addrs, node, ipv6_addr))
+	  for (unsigned int i = 0; i < adj->ipv6_address_count; i++)
 	    {
-	      inet_ntop (AF_INET6, ipv6_addr, (char *)ip6, INET6_ADDRSTRLEN);
-	      vty_outln (vty, "      %s", ip6);
+	      char buf[INET6_ADDRSTRLEN];
+	      inet_ntop (AF_INET6, &adj->ipv6_addresses[i], buf, sizeof(buf));
+	      vty_outln (vty, "      %s", buf);
 	    }
 	}
       vty_out (vty, VTYNL);
