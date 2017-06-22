@@ -1,5 +1,6 @@
 #include <zebra.h>
 
+#include "md5.h"
 #include "memory.h"
 #include "stream.h"
 #include "sbuf.h"
@@ -1444,7 +1445,7 @@ static int pack_item_auth(struct isis_item *i,
 	case ISIS_PASSWD_TYPE_CLEARTXT:
 		if (STREAM_WRITEABLE(s) < auth->length)
 			return 1;
-		stream_put(s, auth->value, auth->length);
+		stream_put(s, auth->passwd, auth->length);
 		break;
 	case ISIS_PASSWD_TYPE_HMAC_MD5:
 		if (STREAM_WRITEABLE(s) < 16)
@@ -1478,19 +1479,14 @@ static int unpack_item_auth(uint16_t mtid,
 	struct isis_auth *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
 
 	rv->type = stream_getc(s);
-	switch (rv->type) {
-	case ISIS_PASSWD_TYPE_HMAC_MD5:
-		rv->length = len - 1;
-		if (rv->length != 16) {
-			sbuf_push(log, indent, "Unexpected auth length for HMAC-MD5 (expected 16, got %"
-			          PRIu8 ")\n", rv->length);
-			XFREE(MTYPE_ISIS_TLV2, rv);
-			return 1;
-		}
-		break;
-	default:
-		rv->length = len - 1;
-		break;
+	rv->length = len - 1;
+
+	if (rv->type == ISIS_PASSWD_TYPE_HMAC_MD5
+	    && rv->length != 16) {
+		sbuf_push(log, indent, "Unexpected auth length for HMAC-MD5 (expected 16, got %"
+		          PRIu8 ")\n", rv->length);
+		XFREE(MTYPE_ISIS_TLV2, rv);
+		return 1;
 	}
 
 	stream_get(rv->value, s, rv->length);
@@ -1636,8 +1632,10 @@ top:
 
 		/* Multiple auths don't go into one TLV, so always break */
 		if (context == ISIS_CONTEXT_LSP
-		    && type == ISIS_TLV_AUTH)
+		    && type == ISIS_TLV_AUTH) {
+			item = item->next;
 			break;
+		}
 
 		if (len > 255) {
 			if (!last_len) /* strange, not a single item fit */
@@ -1729,6 +1727,12 @@ static int unpack_tlv_with_items(enum isis_tlv_context context,
 	           && tlv_type == ISIS_TLV_OLDSTYLE_IP_REACH_EXT) {
 		struct isis_tlvs *tlvs = dest;
 		dest = &tlvs->oldstyle_ip_reach_ext;
+	}
+
+	if (context == ISIS_CONTEXT_LSP
+	    && tlv_type == ISIS_TLV_MT_ROUTER_INFO) {
+		struct isis_tlvs *tlvs = dest;
+		tlvs->mt_router_info_empty = (tlv_pos >= (size_t)tlv_len);
 	}
 
 	while (tlv_pos < (size_t)tlv_len) {
@@ -1872,6 +1876,8 @@ struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
 	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_ROUTER_INFO,
 	           &tlvs->mt_router_info, &rv->mt_router_info);
 
+	tlvs->mt_router_info_empty = rv->mt_router_info_empty;
+
 	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_OLDSTYLE_REACH,
 	           &tlvs->oldstyle_reach, &rv->oldstyle_reach);
 
@@ -1929,8 +1935,12 @@ static void format_tlvs(struct isis_tlvs *tlvs, struct sbuf *buf, int indent)
 	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_AREA_ADDRESSES,
 	             &tlvs->area_addresses, buf, indent);
 
-	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_ROUTER_INFO,
-	             &tlvs->mt_router_info, buf, indent);
+	if (tlvs->mt_router_info_empty) {
+		sbuf_push(buf, indent, "MT Router Info: None\n");
+	} else {
+		format_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_ROUTER_INFO,
+		             &tlvs->mt_router_info, buf, indent);
+	}
 
 	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_OLDSTYLE_REACH,
 	             &tlvs->oldstyle_reach, buf, indent);
@@ -2029,7 +2039,48 @@ void isis_free_tlvs(struct isis_tlvs *tlvs)
 	XFREE(MTYPE_ISIS_TLV2, tlvs);
 }
 
-int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream)
+static void add_padding(struct stream *s)
+{
+	while (STREAM_WRITEABLE(s)) {
+		if (STREAM_WRITEABLE(s) == 1)
+			break;
+		uint32_t padding_len = STREAM_WRITEABLE(s) - 2;
+
+		if (padding_len > 255) {
+			if (padding_len == 256)
+				padding_len = 254;
+			else
+				padding_len = 255;
+		}
+
+		stream_putc(s, ISIS_TLV_PADDING);
+		stream_putc(s, padding_len);
+		stream_put(s, NULL, padding_len);
+	}
+}
+
+static void update_auth_hmac_md5(struct isis_auth *auth, struct stream *s)
+{
+	uint8_t digest[16];
+
+	hmac_md5(STREAM_DATA(s), stream_get_endp(s),
+	         auth->passwd, auth->plength, digest);
+
+	memcpy(STREAM_DATA(s) + auth->offset, digest, 16);
+}
+
+static void update_auth(struct isis_tlvs *tlvs, struct stream *s)
+{
+	struct isis_auth *auth_head = (struct isis_auth*)tlvs->isis_auth.head;
+
+	for (struct isis_auth *auth = auth_head; auth; auth = auth->next) {
+		if (auth->type == ISIS_PASSWD_TYPE_HMAC_MD5)
+			update_auth_hmac_md5(auth, s);
+	}
+}
+
+int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream,
+                   size_t len_pointer, bool pad)
 {
 	int rv;
 
@@ -2047,10 +2098,17 @@ int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream)
 	if (rv)
 		return rv;
 
-	rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_ROUTER_INFO,
-	                &tlvs->mt_router_info, stream);
-	if (rv)
-		return rv;
+	if (tlvs->mt_router_info_empty) {
+		if (STREAM_WRITEABLE(stream) < 2)
+			return 1;
+		stream_putc(stream, ISIS_TLV_MT_ROUTER_INFO);
+		stream_putc(stream, 0);
+	} else {
+		rv = pack_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_ROUTER_INFO,
+		                &tlvs->mt_router_info, stream);
+		if (rv)
+			return rv;
+	}
 
 	rv = pack_tlv_dynamic_hostname(tlvs->hostname, stream);
 	if (rv)
@@ -2120,6 +2178,15 @@ int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream)
 	                   &tlvs->mt_ipv6_reach, stream);
 	if (rv)
 		return rv;
+
+	if (pad)
+		add_padding(stream);
+
+	if (len_pointer != (size_t)-1) {
+		stream_putw_at(stream, len_pointer, stream_get_endp(stream));
+	}
+
+	update_auth(tlvs, stream);
 
 	return 0;
 }
@@ -2302,3 +2369,106 @@ static const struct tlv_ops *tlv_table[ISIS_CONTEXT_MAX][ISIS_TLV_MAX] = {
 		[ISIS_SUBTLV_IPV6_SOURCE_PREFIX] = &subtlv_ipv6_source_prefix_ops,
 	}
 };
+
+/* Accessor functions */
+
+void isis_tlvs_add_auth(struct isis_tlvs *tlvs, struct isis_passwd *passwd)
+{
+	if (passwd->type == ISIS_PASSWD_TYPE_UNUSED)
+		return;
+
+	struct isis_auth *auth = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*auth));
+
+	auth->type = passwd->type;
+
+	auth->plength = passwd->len;
+	memcpy(auth->passwd, passwd->passwd,
+	       MIN(sizeof(auth->passwd), sizeof(passwd->passwd)));
+
+	if (auth->type == ISIS_PASSWD_TYPE_CLEARTXT) {
+		auth->length = passwd->len;
+		memcpy(auth->value, passwd->passwd,
+		       MIN(sizeof(auth->value), sizeof(passwd->passwd)));
+	}
+
+	append_item(&tlvs->isis_auth, (struct isis_item*)auth);
+}
+
+void isis_tlvs_add_area_addresses(struct isis_tlvs *tlvs, struct list *addresses)
+{
+	struct listnode *node;
+	struct area_addr *area_addr;
+
+	for (ALL_LIST_ELEMENTS_RO(addresses, node, area_addr)) {
+		struct isis_area_address *a = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*a));
+
+		a->len = area_addr->addr_len;
+		memcpy(a->addr, area_addr->area_addr, 20);
+		append_item(&tlvs->area_addresses, (struct isis_item*)a);
+	}
+}
+
+void isis_tlvs_add_lan_neighbors(struct isis_tlvs *tlvs, struct list *neighbors)
+{
+	struct listnode *node;
+	u_char *snpa;
+
+	for (ALL_LIST_ELEMENTS_RO(neighbors, node, snpa)) {
+		struct isis_lan_neighbor *n = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*n));
+
+		memcpy(n->mac, snpa, 6);
+		append_item(&tlvs->lan_neighbor, (struct isis_item*)n);
+	}
+}
+
+void isis_tlvs_set_protocols_supported(struct isis_tlvs *tlvs, struct nlpids *nlpids)
+{
+	tlvs->protocols_supported.count = nlpids->count;
+	if (tlvs->protocols_supported.protocols)
+		XFREE(MTYPE_ISIS_TLV2, tlvs->protocols_supported.protocols);
+	if (nlpids->count) {
+		tlvs->protocols_supported.protocols = XCALLOC(MTYPE_ISIS_TLV2,
+		                                              nlpids->count);
+		memcpy(tlvs->protocols_supported.protocols,
+		       nlpids->nlpids, nlpids->count);
+	} else {
+		tlvs->protocols_supported.protocols = NULL;
+	}
+}
+
+void isis_tlvs_add_mt_router_info(struct isis_tlvs *tlvs, uint16_t mtid,
+                                 bool overload, bool attached)
+{
+	struct isis_mt_router_info *i = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*i));
+
+	i->overload = overload;
+	i->attached = attached;
+	i->mtid = mtid;
+	append_item(&tlvs->mt_router_info, (struct isis_item*)i);
+}
+
+void isis_tlvs_add_ipv4_addresses(struct isis_tlvs *tlvs, struct list *addresses)
+{
+	struct listnode *node;
+	struct prefix_ipv4 *ip_addr;
+
+	for (ALL_LIST_ELEMENTS_RO(addresses, node, ip_addr)) {
+		struct isis_ipv4_address *a = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*a));
+
+		a->addr = ip_addr->prefix;
+		append_item(&tlvs->ipv4_address, (struct isis_item*)a);
+	}
+}
+
+void isis_tlvs_add_ipv6_addresses(struct isis_tlvs *tlvs, struct list *addresses)
+{
+	struct listnode *node;
+	struct prefix_ipv6 *ip_addr;
+
+	for (ALL_LIST_ELEMENTS_RO(addresses, node, ip_addr)) {
+		struct isis_ipv6_address *a = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*a));
+
+		a->addr = ip_addr->prefix;
+		append_item(&tlvs->ipv6_address, (struct isis_item*)a);
+	}
+}

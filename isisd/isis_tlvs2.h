@@ -118,6 +118,9 @@ struct isis_auth {
 	uint8_t length;
 	uint8_t value[256];
 
+	uint8_t plength;
+	uint8_t passwd[256];
+
 	size_t offset; /* Only valid after packing */
 };
 
@@ -149,6 +152,7 @@ struct isis_tlvs {
 	struct isis_item_list ipv4_address;
 	struct isis_item_list ipv6_address;
 	struct isis_item_list mt_router_info;
+	bool mt_router_info_empty;
 	struct isis_item_list extended_ip_reach;
 	struct isis_mt_item_list mt_ip_reach;
 	char *hostname;
@@ -206,7 +210,8 @@ enum isis_tlv_type {
 	 ||(tlv_type == ISIS_TLV_MT_IPV6_REACH))
 
 struct stream;
-int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream);
+int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream,
+                   size_t len_pointer, bool pad);
 void isis_free_tlvs(struct isis_tlvs *tlvs);
 struct isis_tlvs *isis_alloc_tlvs(void);
 int isis_unpack_tlvs(size_t avail_len,
@@ -229,4 +234,12 @@ struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs);
 #define ISIS_MT_AT_MASK        0x4000
 #endif
 
+void isis_tlvs_add_auth(struct isis_tlvs *tlvs, struct isis_passwd *passwd);
+void isis_tlvs_add_area_addresses(struct isis_tlvs *tlvs, struct list *addresses);
+void isis_tlvs_add_lan_neighbors(struct isis_tlvs *tlvs, struct list *neighbors);
+void isis_tlvs_set_protocols_supported(struct isis_tlvs *tlvs, struct nlpids *nlpids);
+void isis_tlvs_add_mt_router_info(struct isis_tlvs *tlvs, uint16_t mtid,
+                                  bool overload, bool attached);
+void isis_tlvs_add_ipv4_addresses(struct isis_tlvs *tlvs, struct list *addresses);
+void isis_tlvs_add_ipv6_addresses(struct isis_tlvs *tlvs, struct list *addresses);
 #endif

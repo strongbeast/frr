@@ -54,6 +54,7 @@
 #include "isisd/isis_events.h"
 #include "isisd/isis_te.h"
 #include "isisd/isis_mt.h"
+#include "isisd/isis_tlvs2.h"
 
 #define ISIS_MINIMUM_FIXED_HDR_LEN 15
 #define ISIS_MIN_PDU_LEN           13	/* partial seqnum pdu with id_len=2 */
@@ -2199,8 +2200,7 @@ put_hello_hdr(struct isis_circuit *circuit, int level, size_t *len_pointer)
 int
 send_hello (struct isis_circuit *circuit, int level)
 {
-  unsigned char hmac_md5_hash[ISIS_AUTH_MD5_SIZE];
-  size_t len_pointer, length, auth_tlv_offset = 0;
+  size_t len_pointer;
   int retval;
 
   if (circuit->is_passive)
@@ -2214,64 +2214,18 @@ send_hello (struct isis_circuit *circuit, int level)
 
   put_hello_hdr(circuit, level, &len_pointer);
 
-  /*
-   * Then the variable length part.
-   */
+  struct isis_tlvs *tlvs = isis_alloc_tlvs();
 
-  /* add circuit password */
-  switch (circuit->passwd.type)
-  {
-    /* Cleartext */
-    case ISIS_PASSWD_TYPE_CLEARTXT:
-      if (tlv_add_authinfo (circuit->passwd.type, circuit->passwd.len,
-                            circuit->passwd.passwd, circuit->snd_stream))
-        return ISIS_WARNING;
-      break;
+  isis_tlvs_add_auth(tlvs, &circuit->passwd);
 
-    /* HMAC MD5 */
-    case ISIS_PASSWD_TYPE_HMAC_MD5:
-      /* Remember where TLV is written so we can later overwrite the MD5 hash */
-      auth_tlv_offset = stream_get_endp (circuit->snd_stream);
-      memset(&hmac_md5_hash, 0, ISIS_AUTH_MD5_SIZE);
-      if (tlv_add_authinfo (circuit->passwd.type, ISIS_AUTH_MD5_SIZE,
-                            hmac_md5_hash, circuit->snd_stream))
-        return ISIS_WARNING;
-      break;
-
-    default:
-      break;
-  }
-
-  /*  Area Addresses TLV */
-  if (listcount (circuit->area->area_addrs) == 0)
+  if (!listcount(circuit->area->area_addrs))
     return ISIS_WARNING;
-  if (tlv_add_area_addrs (circuit->area->area_addrs, circuit->snd_stream))
-    return ISIS_WARNING;
+  isis_tlvs_add_area_addresses(tlvs, circuit->area->area_addrs);
 
-  /*  LAN Neighbors TLV */
   if (circuit->circ_type == CIRCUIT_T_BROADCAST)
-    {
-      if (level == IS_LEVEL_1 && circuit->u.bc.lan_neighs[0] &&
-          listcount (circuit->u.bc.lan_neighs[0]) > 0)
-	if (tlv_add_lan_neighs (circuit->u.bc.lan_neighs[0],
-				circuit->snd_stream))
-	  return ISIS_WARNING;
-      if (level == IS_LEVEL_2 && circuit->u.bc.lan_neighs[1] &&
-          listcount (circuit->u.bc.lan_neighs[1]) > 0)
-	if (tlv_add_lan_neighs (circuit->u.bc.lan_neighs[1],
-				circuit->snd_stream))
-	  return ISIS_WARNING;
-    }
+    isis_tlvs_add_lan_neighbors(tlvs, circuit->u.bc.lan_neighs[level - 1]);
 
-  /* Protocols Supported TLV */
-  if (circuit->nlpids.count > 0)
-    if (tlv_add_nlpid (&circuit->nlpids, circuit->snd_stream))
-      return ISIS_WARNING;
-  /* IP interface Address TLV */
-  if (circuit->ip_router && circuit->ip_addrs &&
-      listcount (circuit->ip_addrs) > 0)
-    if (tlv_add_ip_addrs (circuit->ip_addrs, circuit->snd_stream))
-      return ISIS_WARNING;
+  isis_tlvs_set_protocols_supported(tlvs, &circuit->nlpids);
 
   /*
    * MT Supported TLV
@@ -2284,50 +2238,27 @@ send_hello (struct isis_circuit *circuit, int level)
   unsigned int mt_count;
 
   mt_settings = circuit_mt_settings(circuit, &mt_count);
-  if ((mt_count == 0 && area_is_mt(circuit->area))
-      || (mt_count == 1 && mt_settings[0]->mtid != ISIS_MT_IPV4_UNICAST)
-      || (mt_count > 1))
+  if (mt_count == 0 && area_is_mt(circuit->area))
     {
-      struct list *mt_info = list_new();
-      mt_info->del = free_tlv;
-
+      tlvs->mt_router_info_empty = true;
+    }
+  else if ((mt_count == 1 && mt_settings[0]->mtid != ISIS_MT_IPV4_UNICAST)
+           || (mt_count > 1))
+    {
       for (unsigned int i = 0; i < mt_count; i++)
-        {
-          struct mt_router_info *info;
-
-          info = XCALLOC(MTYPE_ISIS_TLV, sizeof(*info));
-          info->mtid = mt_settings[i]->mtid;
-          /* overload info is not valid in IIH, so it's not included here */
-          listnode_add(mt_info, info);
-        }
-      tlv_add_mt_router_info (mt_info, circuit->snd_stream);
-      list_free(mt_info);
+        isis_tlvs_add_mt_router_info(tlvs, mt_settings[i]->mtid, false, false);
     }
 
-  /* IPv6 Interface Address TLV */
-  if (circuit->ipv6_router && circuit->ipv6_link &&
-      listcount (circuit->ipv6_link) > 0)
-    if (tlv_add_ipv6_addrs (circuit->ipv6_link, circuit->snd_stream))
-      return ISIS_WARNING;
+  if (circuit->ip_router && circuit->ip_addrs)
+    isis_tlvs_add_ipv4_addresses(tlvs, circuit->ip_addrs);
 
-  if (circuit->pad_hellos)
-    if (tlv_add_padding (circuit->snd_stream))
-      return ISIS_WARNING;
+  if (circuit->ipv6_router && circuit->ipv6_link)
+    isis_tlvs_add_ipv6_addresses(tlvs, circuit->ipv6_link);
 
-  length = stream_get_endp (circuit->snd_stream);
-  /* Update PDU length */
-  stream_putw_at (circuit->snd_stream, len_pointer, (u_int16_t) length);
-
-  /* For HMAC MD5 we need to compute the md5 hash and store it */
-  if (circuit->passwd.type == ISIS_PASSWD_TYPE_HMAC_MD5)
+  if (isis_pack_tlvs(tlvs, circuit->snd_stream, len_pointer, circuit->pad_hellos))
     {
-      hmac_md5 (STREAM_DATA (circuit->snd_stream),
-                stream_get_endp (circuit->snd_stream),
-                (unsigned char *) &circuit->passwd.passwd, circuit->passwd.len,
-                (unsigned char *) &hmac_md5_hash);
-      /* Copy the hash into the stream */
-      memcpy (STREAM_DATA (circuit->snd_stream) + auth_tlv_offset + 3,
-              hmac_md5_hash, ISIS_AUTH_MD5_SIZE);
+      isis_free_tlvs(tlvs);
+      return ISIS_WARNING; /* XXX: Maybe Log TLV structure? */
     }
 
   if (isis->debugs & DEBUG_ADJ_PACKETS)
@@ -2336,18 +2267,20 @@ send_hello (struct isis_circuit *circuit, int level)
 	{
 	  zlog_debug ("ISIS-Adj (%s): Sending L%d LAN IIH on %s, length %zd",
 		      circuit->area->area_tag, level, circuit->interface->name,
-		      length);
+		      stream_get_endp(circuit->snd_stream));
 	}
       else
 	{
 	  zlog_debug ("ISIS-Adj (%s): Sending P2P IIH on %s, length %zd",
 		      circuit->area->area_tag, circuit->interface->name,
-		      length);
+		      stream_get_endp(circuit->snd_stream));
 	}
       if (isis->debugs & DEBUG_PACKET_DUMP)
         zlog_dump_data (STREAM_DATA (circuit->snd_stream),
                         stream_get_endp (circuit->snd_stream));
     }
+
+  isis_free_tlvs(tlvs);
 
   retval = circuit->tx (circuit, level);
   if (retval != ISIS_OK)
