@@ -70,7 +70,7 @@ static int test(FILE *input, FILE *output)
 
 	struct stream *s2 = stream_new(TEST_STREAM_SIZE);
 
-	if (isis_pack_tlvs(tlv_copy, s2)) {
+	if (isis_pack_tlvs(tlv_copy, s2, (size_t)-1, false)) {
 		fprintf(output, "Could not pack TLVs.\n");
 		assert(0);
 	}
