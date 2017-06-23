@@ -252,4 +252,8 @@ struct isis_adjacency;
 void isis_tlvs_to_adj(struct isis_tlvs *tlvs, struct isis_adjacency *adj, bool *changed);
 bool isis_tlvs_own_snpa_found(struct isis_tlvs *tlvs, uint8_t *snpa);
 void isis_tlvs_add_lsp_entry(struct isis_tlvs *tlvs, struct isis_lsp *lsp);
+void isis_tlvs_add_csnp_entries(struct isis_tlvs *tlvs,
+                                uint8_t *start_id, uint8_t *stop_id,
+                                uint16_t num_lsps, dict_t *lspdb,
+                                struct isis_lsp **last_lsp);
 #endif

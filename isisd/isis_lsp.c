@@ -676,42 +676,6 @@ lsp_build_list_nonzero_ht (u_char * start_id, u_char * stop_id,
   return;
 }
 
-/*
- * Build a list of num_lsps LSPs bounded by start_id and stop_id.
- */
-void
-lsp_build_list (u_char * start_id, u_char * stop_id, u_char num_lsps,
-		struct list *list, dict_t * lspdb)
-{
-  u_char count;
-  dnode_t *first, *last, *curr;
-
-  first = dict_lower_bound (lspdb, start_id);
-  if (!first)
-    return;
-
-  last = dict_upper_bound (lspdb, stop_id);
-
-  curr = first;
-
-  listnode_add (list, first->dict_data);
-  count = 1;
-
-  while (curr)
-    {
-      curr = dict_next (lspdb, curr);
-      if (curr)
-        {
-          listnode_add (list, curr->dict_data);
-          count++;
-        }
-      if (count == num_lsps || curr == last)
-        break;
-    }
-
-  return;
-}
-
 static void
 lsp_set_time (struct isis_lsp *lsp)
 {
