@@ -38,6 +38,8 @@ struct isis_lsp_entry {
 	uint8_t id[8];
 	uint16_t checksum;
 	uint32_t seqno;
+
+	struct isis_lsp *lsp;
 };
 
 struct isis_extended_reach;
@@ -250,3 +252,4 @@ struct isis_adjacency;
 void isis_tlvs_to_adj(struct isis_tlvs *tlvs, struct isis_adjacency *adj, bool *changed);
 bool isis_tlvs_own_snpa_found(struct isis_tlvs *tlvs, uint8_t *snpa);
 #endif
+void isis_tlvs_add_lsp_entry(struct isis_tlvs *tlvs, struct isis_lsp *lsp);

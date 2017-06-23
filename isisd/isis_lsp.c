@@ -712,35 +712,6 @@ lsp_build_list (u_char * start_id, u_char * stop_id, u_char num_lsps,
   return;
 }
 
-/*
- * Build a list of LSPs with SSN flag set for the given circuit
- */
-void
-lsp_build_list_ssn (struct isis_circuit *circuit, u_char num_lsps,
-                    struct list *list, dict_t * lspdb)
-{
-  dnode_t *dnode, *next;
-  struct isis_lsp *lsp;
-  u_char count = 0;
-
-  dnode = dict_first (lspdb);
-  while (dnode != NULL)
-    {
-      next = dict_next (lspdb, dnode);
-      lsp = dnode_get (dnode);
-      if (ISIS_CHECK_FLAG (lsp->SSNflags, circuit))
-        {
-          listnode_add (list, lsp);
-          ++count;
-        }
-      if (count == num_lsps)
-        break;
-      dnode = next;
-    }
-
-  return;
-}
-
 static void
 lsp_set_time (struct isis_lsp *lsp)
 {

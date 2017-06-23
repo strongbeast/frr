@@ -68,4 +68,6 @@ struct nlpids
   u_char nlpids[4];		/* FIXME: enough ? */
 };
 
+const char *isis_format_id(uint8_t *id, size_t len);
+
 #endif

@@ -8,10 +8,14 @@
 #include "isisd/isisd.h"
 #include "isisd/isis_memory.h"
 #include "isis_tlvs2.h"
-#include "isis_common2.h"
+#include "isis_common.h"
 #include "isisd/isis_mt.h"
 #include "isisd/isis_misc.h"
 #include "isisd/isis_adjacency.h"
+#include "isisd/isis_circuit.h"
+#include "isisd/isis_tlv.h"
+#include "isisd/isis_pdu.h"
+#include "isisd/isis_lsp.h"
 
 DEFINE_MTYPE_STATIC(ISISD, ISIS_TLV2, "ISIS TLVs (new)")
 DEFINE_MTYPE_STATIC(ISISD, ISIS_SUBTLV, "ISIS Sub-TLVs")
@@ -2071,7 +2075,7 @@ static void update_auth_hmac_md5(struct isis_auth *auth, struct stream *s)
 
 	hmac_md5(STREAM_DATA(s), stream_get_endp(s),
 	         auth->passwd, auth->plength, digest);
-
+	memcpy(auth->value, digest, 16);
 	memcpy(STREAM_DATA(s) + auth->offset, digest, 16);
 }
 
@@ -2698,4 +2702,17 @@ bool isis_tlvs_own_snpa_found(struct isis_tlvs *tlvs, uint8_t *snpa)
 	}
 
 	return false;
+}
+
+void isis_tlvs_add_lsp_entry(struct isis_tlvs *tlvs, struct isis_lsp *lsp)
+{
+	struct isis_lsp_entry *entry = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*entry));
+
+	entry->rem_lifetime = ntohs(lsp->lsp_header->rem_lifetime);
+	memcpy(entry->id, lsp->lsp_header->lsp_id, ISIS_SYS_ID_LEN + 2);
+	entry->checksum = ntohs(lsp->lsp_header->checksum);
+	entry->seqno = ntohl(lsp->lsp_header->seq_num);
+	entry->lsp = lsp;
+
+	append_item(&tlvs->lsp_entries, (struct isis_item*)entry);
 }
