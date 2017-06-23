@@ -70,4 +70,7 @@ struct nlpids
 
 const char *isis_format_id(uint8_t *id, size_t len);
 
+#include "lib/log.h"
+void log_multiline(int priority, const char *prefix,
+                   const char *format, ...) PRINTF_ATTRIBUTE(3, 4);
 #endif

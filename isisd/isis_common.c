@@ -1,5 +1,8 @@
 #include <zebra.h>
 
+#include "lib/log_int.h"
+#include "lib/memory.h"
+
 #include "isis_common.h"
 
 #define FORMAT_ID_SIZE sizeof("0000.0000.0000.00-00")
@@ -31,4 +34,38 @@ const char *isis_format_id(uint8_t *id, size_t len)
 		snprintf(rv + 17, FORMAT_ID_SIZE - 17, "-%02x", id[7]);
 
 	return rv;
+}
+
+void log_multiline(int priority, const char *prefix, const char *format, ...)
+{
+	int size = 0;
+	char *p = NULL;
+	va_list ap;
+
+	va_start(ap, format);
+	size = vsnprintf(p, size, format, ap);
+	va_end(ap);
+
+	if (size < 0)
+		return;
+
+	size++;
+	p = XMALLOC(MTYPE_TMP, size);
+
+	va_start(ap, format);
+	size = vsnprintf(p, size, format, ap);
+	va_end(ap);
+
+	if (size < 0) {
+		XFREE(MTYPE_TMP, p);
+		return;
+	}
+
+	char *saveptr = NULL;
+	for (char *line = strtok_r(p, "\n", &saveptr); line;
+	     line = strtok_r(NULL, "\n", &saveptr)) {
+	       zlog(priority, "%s%s", prefix, line);
+	}
+
+	XFREE(MTYPE_TMP, p);
 }

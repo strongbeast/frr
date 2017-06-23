@@ -251,5 +251,5 @@ bool isis_tlvs_area_addresses_match(struct isis_tlvs *tlvs, struct list *address
 struct isis_adjacency;
 void isis_tlvs_to_adj(struct isis_tlvs *tlvs, struct isis_adjacency *adj, bool *changed);
 bool isis_tlvs_own_snpa_found(struct isis_tlvs *tlvs, uint8_t *snpa);
-#endif
 void isis_tlvs_add_lsp_entry(struct isis_tlvs *tlvs, struct isis_lsp *lsp);
+#endif

@@ -2244,11 +2244,11 @@ send_psnp (int level, struct isis_circuit *circuit)
 
       if (isis->debugs & DEBUG_SNP_PACKETS)
         {
-          zlog_debug ("ISIS-Snp (%s): Sending L%d PSNP on %s, length %zd\n%s",
+          zlog_debug ("ISIS-Snp (%s): Sending L%d PSNP on %s, length %zd",
                       circuit->area->area_tag, level,
                       circuit->interface->name,
-                      stream_get_endp (circuit->snd_stream),
-                      isis_format_tlvs(tlvs));
+                      stream_get_endp (circuit->snd_stream));
+          log_multiline(LOG_DEBUG, "              ", "%s", isis_format_tlvs(tlvs));
           if (isis->debugs & DEBUG_PACKET_DUMP)
             zlog_dump_data (STREAM_DATA (circuit->snd_stream),
                             stream_get_endp (circuit->snd_stream));
