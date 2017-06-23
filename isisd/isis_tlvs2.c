@@ -1754,7 +1754,8 @@ static int unpack_tlv_with_items(enum isis_tlv_context context,
 
 /* Functions to manipulate mt_item_lists */
 
-static int isis_mt_item_list_cmp(struct isis_item_list *a, struct isis_item_list *b)
+static int isis_mt_item_list_cmp(const struct isis_item_list *a,
+                                 const struct isis_item_list *b)
 {
 	if (a->mtid < b->mtid)
 		return -1;
@@ -1763,7 +1764,8 @@ static int isis_mt_item_list_cmp(struct isis_item_list *a, struct isis_item_list
 	return 0;
 }
 
-RB_GENERATE_STATIC(isis_mt_item_list, isis_item_list, mt_tree, isis_mt_item_list_cmp);
+RB_PROTOTYPE(isis_mt_item_list, isis_item_list, mt_tree, isis_mt_item_list_cmp);
+RB_GENERATE(isis_mt_item_list, isis_item_list, mt_tree, isis_mt_item_list_cmp);
 
 struct isis_item_list *isis_get_mt_items(struct isis_mt_item_list *m, uint16_t mtid)
 {
@@ -1832,7 +1834,7 @@ static void copy_mt_items(enum isis_tlv_context context, enum isis_tlv_type type
 {
 	struct isis_item_list *n;
 
-	RB_INIT(dest);
+	RB_INIT(isis_mt_item_list, dest);
 
 	RB_FOREACH(n, isis_mt_item_list, src) {
 		copy_items(context, type, n, isis_get_mt_items(dest, n->mtid));
@@ -1854,15 +1856,15 @@ struct isis_tlvs *isis_alloc_tlvs(void)
 	init_item_list(&result->lan_neighbor);
 	init_item_list(&result->lsp_entries);
 	init_item_list(&result->extended_reach);
-	RB_INIT(&result->mt_reach);
+	RB_INIT(isis_mt_item_list, &result->mt_reach);
 	init_item_list(&result->oldstyle_ip_reach);
 	init_item_list(&result->oldstyle_ip_reach_ext);
 	init_item_list(&result->ipv4_address);
 	init_item_list(&result->ipv6_address);
 	init_item_list(&result->extended_ip_reach);
-	RB_INIT(&result->mt_ip_reach);
+	RB_INIT(isis_mt_item_list, &result->mt_ip_reach);
 	init_item_list(&result->ipv6_reach);
-	RB_INIT(&result->mt_ipv6_reach);
+	RB_INIT(isis_mt_item_list, &result->mt_ipv6_reach);
 
 	return result;
 }
