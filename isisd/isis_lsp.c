@@ -246,6 +246,10 @@ int
 lsp_compare (char *areatag, struct isis_lsp *lsp, u_int32_t seq_num,
 	     u_int16_t checksum, u_int16_t rem_lifetime)
 {
+  seq_num = htonl(seq_num);
+  checksum = htons(checksum);
+  rem_lifetime = htons(rem_lifetime);
+
   /* no point in double ntohl on seqnum */
   if (lsp->lsp_header->seq_num == seq_num &&
       lsp->lsp_header->checksum == checksum &&
@@ -610,7 +614,7 @@ lsp_new(struct isis_area *area, u_char * lsp_id,
   lsp->lsp_header = (struct isis_link_state_hdr *)(STREAM_DATA (lsp->pdu) + ISIS_FIXED_HDR_LEN);
   lsp->lsp_header->pdu_len = htons (ISIS_FIXED_HDR_LEN + ISIS_LSP_HDR_LEN);
   memcpy (lsp->lsp_header->lsp_id, lsp_id, ISIS_SYS_ID_LEN + 2);
-  lsp->lsp_header->checksum = checksum;	/* Provided in network order */
+  lsp->lsp_header->checksum = htons(checksum);
   lsp->lsp_header->seq_num = htonl (seq_num);
   lsp->lsp_header->rem_lifetime = htons (rem_lifetime);
   lsp->lsp_header->lsp_bits = lsp_bits;
