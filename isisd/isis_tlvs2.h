@@ -3,6 +3,7 @@
 
 #include "openbsd-tree.h"
 #include "prefix.h"
+#include "isisd/dict.h"
 
 struct isis_subtlvs;
 
@@ -237,9 +238,6 @@ struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs);
 #define ISIS_MT_AT_MASK        0x4000
 #endif
 
-
-struct dict_t;
-typedef struct dict_t dict_t;
 
 void isis_tlvs_add_auth(struct isis_tlvs *tlvs, struct isis_passwd *passwd);
 void isis_tlvs_add_area_addresses(struct isis_tlvs *tlvs, struct list *addresses);
