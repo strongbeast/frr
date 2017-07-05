@@ -49,17 +49,6 @@ struct isis_passwd
 };
 
 /*
- * (Dynamic) Hostname
- * one struct for cache list
- * one struct for LSP TLV
- */
-struct hostname
-{
-  u_char namelen;
-  u_char name[255];
-};
-
-/*
  * Supported Protocol IDs
  */
 struct nlpids
@@ -72,5 +61,8 @@ const char *isis_format_id(uint8_t *id, size_t len);
 
 #include "lib/log.h"
 void log_multiline(int priority, const char *prefix,
+                   const char *format, ...) PRINTF_ATTRIBUTE(3, 4);
+struct vty;
+void vty_multiline(struct vty *vty, const char *prefix,
                    const char *format, ...) PRINTF_ATTRIBUTE(3, 4);
 #endif

@@ -13,7 +13,6 @@
 #include "isisd/isis_misc.h"
 #include "isisd/isis_adjacency.h"
 #include "isisd/isis_circuit.h"
-#include "isisd/isis_tlv.h"
 #include "isisd/isis_pdu.h"
 #include "isisd/isis_lsp.h"
 
@@ -500,9 +499,12 @@ static struct isis_item *copy_item_extended_reach(struct isis_item *i)
 
 	memcpy(rv->id, r->id, 7);
 	rv->metric = r->metric;
-#if 0
-	rv->subtlvs = isis_copy_tlvs(r->subtlvs);
-#endif
+
+	if (r->subtlvs && r->subtlv_len) {
+		rv->subtlvs = XCALLOC(MTYPE_ISIS_TLV2, r->subtlv_len);
+		memcpy(rv->subtlvs, r->subtlvs, r->subtlv_len);
+		rv->subtlv_len = r->subtlv_len;
+	}
 
 	return (struct isis_item*)rv;
 }
@@ -529,6 +531,7 @@ static void format_item_extended_reach(uint16_t mtid, struct isis_item *i,
 static void free_item_extended_reach(struct isis_item *i)
 {
 	struct isis_extended_reach *item = (struct isis_extended_reach*)i;
+	XFREE(MTYPE_ISIS_TLV2, item->subtlvs);
 	XFREE(MTYPE_ISIS_TLV2, item);
 }
 
@@ -537,23 +540,12 @@ static int pack_item_extended_reach(struct isis_item *i,
 {
 	struct isis_extended_reach *r = (struct isis_extended_reach*)i;
 
-	if (STREAM_WRITEABLE(s) < 11)
+	if (STREAM_WRITEABLE(s) < 11 + (unsigned)r->subtlv_len)
 		return 1;
 	stream_put(s, r->id, sizeof(r->id));
 	stream_put3(s, r->metric);
-	stream_putc(s, 0); /* Put 0 as subtlv length, filled in later */
-#if 0 /* old subtlv code */
-	rv = isis_pack_tlvs(r->subtlvs, s);
-	if (rv)
-		return rv;
-
-	/* Fill in subtlv len */
-	subtlv_len = stream_get_endp(s) - subtlv_len_pos - 1;
-	if (subtlv_len > 255)
-		return 1;
-
-	stream_putc_at(s, subtlv_len_pos, subtlv_len);
-#endif
+	stream_putc(s, r->subtlv_len);
+	stream_put(s, r->subtlvs, r->subtlv_len);
 	return 0;
 }
 
@@ -598,10 +590,14 @@ static int unpack_item_extended_reach(uint16_t mtid,
 		goto out;
 	}
 
-	sbuf_push(log, indent, "Skipping %" PRIu8 " bytes of subtlvs\n",
+	sbuf_push(log, indent, "Storing %" PRIu8 " bytes of subtlvs\n",
 		  subtlv_len);
 
-	stream_forward_getp(s, subtlv_len);
+	if (subtlv_len) {
+		rv->subtlvs = XCALLOC(MTYPE_ISIS_TLV2, subtlv_len);
+		stream_get(rv->subtlvs, s, subtlv_len);
+		rv->subtlv_len = subtlv_len;
+	}
 
 	append_item(items, (struct isis_item*)rv);
 	return 0;
@@ -967,6 +963,77 @@ static int unpack_item_mt_router_info(uint16_t mtid,
 
 	format_item_mt_router_info(mtid, (struct isis_item*)rv, log, indent + 2);
 	append_item(&tlvs->mt_router_info, (struct isis_item*)rv);
+	return 0;
+}
+
+/* Functions related to TLV 134 TE Router ID */
+
+static struct in_addr *copy_tlv_te_router_id(const struct in_addr *id)
+{
+	if (!id)
+		return NULL;
+
+	struct in_addr *rv = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*rv));
+	memcpy(rv, id, sizeof(*rv));
+	return rv;
+}
+
+static void format_tlv_te_router_id(const struct in_addr *id,
+                                    struct sbuf *buf, int indent)
+{
+	if (!id)
+		return;
+
+	char addrbuf[INET_ADDRSTRLEN];
+	inet_ntop(AF_INET, id, addrbuf, sizeof(addrbuf));
+	sbuf_push(buf, indent, "TE Router ID: %s\n", addrbuf);
+}
+
+static void free_tlv_te_router_id(struct in_addr *id)
+{
+	XFREE(MTYPE_ISIS_TLV2, id);
+}
+
+static int pack_tlv_te_router_id(const struct in_addr *id,
+                                 struct stream *s)
+{
+	if (!id)
+		return 0;
+
+	if (STREAM_WRITEABLE(s) < (unsigned)(2 + sizeof(*id)))
+		return 1;
+
+	stream_putc(s, ISIS_TLV_TE_ROUTER_ID);
+	stream_putc(s, 4);
+	stream_put(s, id, 4);
+	return 0;
+}
+
+static int unpack_tlv_te_router_id(enum isis_tlv_context context,
+                                   uint8_t tlv_type,
+                                   uint8_t tlv_len,
+                                   struct stream *s,
+                                   struct sbuf *log,
+                                   void *dest,
+                                   int indent)
+{
+	struct isis_tlvs *tlvs = dest;
+
+	sbuf_push(log, indent, "Unpacking TE Router ID TLV...\n");
+	if (tlv_len != 4) {
+		sbuf_push(log, indent, "WARNING: Length invalid\n");
+		return 1;
+	}
+
+	if (tlvs->hostname) {
+		sbuf_push(log, indent, "WARNING: TE Router ID present multiple times.\n");
+		stream_forward_getp(s, tlv_len);
+		return 0;
+	}
+
+	tlvs->te_router_id = XCALLOC(MTYPE_ISIS_TLV2, 4);
+	stream_get(tlvs->te_router_id, s, 4);
+	format_tlv_te_router_id(tlvs->te_router_id, log, indent + 2);
 	return 0;
 }
 
@@ -1918,6 +1985,8 @@ struct isis_tlvs *isis_copy_tlvs(struct isis_tlvs *tlvs)
 	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_ADDRESS,
 	           &tlvs->ipv6_address, &rv->ipv6_address);
 
+	rv->te_router_id = copy_tlv_te_router_id(tlvs->te_router_id);
+
 	copy_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
 	           &tlvs->extended_ip_reach, &rv->extended_ip_reach);
 
@@ -1962,6 +2031,7 @@ static void format_tlvs(struct isis_tlvs *tlvs, struct sbuf *buf, int indent)
 	             &tlvs->lsp_entries, buf, indent);
 
 	format_tlv_dynamic_hostname(tlvs->hostname, buf, indent);
+	format_tlv_te_router_id(tlvs->te_router_id, buf, indent);
 
 	format_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_REACH,
 	             &tlvs->extended_reach, buf, indent);
@@ -2036,6 +2106,7 @@ void isis_free_tlvs(struct isis_tlvs *tlvs)
 	           &tlvs->ipv4_address);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_IPV6_ADDRESS,
 	           &tlvs->ipv6_address);
+	free_tlv_te_router_id(tlvs->te_router_id);
 	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_EXTENDED_IP_REACH,
 		   &tlvs->extended_ip_reach);
 	free_mt_items(ISIS_CONTEXT_LSP, ISIS_TLV_MT_IP_REACH,
@@ -2069,28 +2140,61 @@ static void add_padding(struct stream *s)
 	}
 }
 
-static void update_auth_hmac_md5(struct isis_auth *auth, struct stream *s)
+#define LSP_REM_LIFETIME_OFF 10
+#define LSP_CHECKSUM_OFF 24
+static void safe_auth_md5(struct stream *s, uint16_t *checksum,
+                          uint16_t *rem_lifetime)
+{
+	memcpy(rem_lifetime, STREAM_DATA(s) + LSP_REM_LIFETIME_OFF,
+	       sizeof(*rem_lifetime));
+	memset(STREAM_DATA(s) + LSP_REM_LIFETIME_OFF, 0,
+	       sizeof(*rem_lifetime));
+	memcpy(checksum, STREAM_DATA(s) + LSP_CHECKSUM_OFF,
+	       sizeof(*checksum));
+	memset(STREAM_DATA(s) + LSP_CHECKSUM_OFF, 0,
+	       sizeof(*checksum));
+}
+
+static void restore_auth_md5(struct stream *s, uint16_t checksum,
+                             uint16_t rem_lifetime)
+{
+	memcpy(STREAM_DATA(s) + LSP_REM_LIFETIME_OFF, &rem_lifetime,
+	       sizeof(rem_lifetime));
+	memcpy(STREAM_DATA(s) + LSP_CHECKSUM_OFF, &checksum,
+	       sizeof(checksum));
+}
+
+static void update_auth_hmac_md5(struct isis_auth *auth, struct stream *s,
+                                 bool is_lsp)
 {
 	uint8_t digest[16];
+	uint16_t checksum, rem_lifetime;
 
+	if (is_lsp)
+		safe_auth_md5(s, &checksum, &rem_lifetime);
+
+	memset(STREAM_DATA(s) + auth->offset, 0, 16);
 	hmac_md5(STREAM_DATA(s), stream_get_endp(s),
 	         auth->passwd, auth->plength, digest);
 	memcpy(auth->value, digest, 16);
 	memcpy(STREAM_DATA(s) + auth->offset, digest, 16);
+
+	if (is_lsp)
+		restore_auth_md5(s, checksum, rem_lifetime);
 }
 
-static void update_auth(struct isis_tlvs *tlvs, struct stream *s)
+static void update_auth(struct isis_tlvs *tlvs, struct stream *s, bool is_lsp)
 {
 	struct isis_auth *auth_head = (struct isis_auth*)tlvs->isis_auth.head;
 
 	for (struct isis_auth *auth = auth_head; auth; auth = auth->next) {
 		if (auth->type == ISIS_PASSWD_TYPE_HMAC_MD5)
-			update_auth_hmac_md5(auth, s);
+			update_auth_hmac_md5(auth, s, is_lsp);
 	}
 }
 
 int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream,
-                   size_t len_pointer, bool pad)
+                   size_t len_pointer, bool pad, bool is_lsp)
 {
 	int rv;
 
@@ -2121,6 +2225,10 @@ int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream,
 	}
 
 	rv = pack_tlv_dynamic_hostname(tlvs->hostname, stream);
+	if (rv)
+		return rv;
+
+	rv = pack_tlv_te_router_id(tlvs->te_router_id, stream);
 	if (rv)
 		return rv;
 
@@ -2196,7 +2304,7 @@ int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream,
 		stream_putw_at(stream, len_pointer, stream_get_endp(stream));
 	}
 
-	update_auth(tlvs, stream);
+	update_auth(tlvs, stream, is_lsp);
 
 	return 0;
 }
@@ -2342,6 +2450,7 @@ ITEM_TLV_OPS(extended_reach, "TLV 22 Extended Reachability");
 ITEM_TLV_OPS(oldstyle_ip_reach, "TLV 128/130 IP Reachability");
 TLV_OPS(protocols_supported, "TLV 129 Protocols Supported");
 ITEM_TLV_OPS(ipv4_address, "TLV 132 IPv4 Interface Address");
+TLV_OPS(te_router_id, "TLV 134 TE Router ID");
 ITEM_TLV_OPS(extended_ip_reach, "TLV 135 Extended IP Reachability");
 TLV_OPS(dynamic_hostname, "TLV 137 Dynamic Hostname");
 ITEM_TLV_OPS(mt_router_info, "TLV 229 MT Router Information");
@@ -2363,6 +2472,7 @@ static const struct tlv_ops *tlv_table[ISIS_CONTEXT_MAX][ISIS_TLV_MAX] = {
 		[ISIS_TLV_PROTOCOLS_SUPPORTED] = &tlv_protocols_supported_ops,
 		[ISIS_TLV_OLDSTYLE_IP_REACH_EXT] = &tlv_oldstyle_ip_reach_ops,
 		[ISIS_TLV_IPV4_ADDRESS] = &tlv_ipv4_address_ops,
+		[ISIS_TLV_TE_ROUTER_ID] = &tlv_te_router_id_ops,
 		[ISIS_TLV_EXTENDED_IP_REACH] = &tlv_extended_ip_reach_ops,
 		[ISIS_TLV_MT_IP_REACH] = &tlv_extended_ip_reach_ops,
 		[ISIS_TLV_DYNAMIC_HOSTNAME] = &tlv_dynamic_hostname_ops,
@@ -2384,6 +2494,10 @@ static const struct tlv_ops *tlv_table[ISIS_CONTEXT_MAX][ISIS_TLV_MAX] = {
 
 void isis_tlvs_add_auth(struct isis_tlvs *tlvs, struct isis_passwd *passwd)
 {
+	free_items(ISIS_CONTEXT_LSP, ISIS_TLV_AUTH,
+	           &tlvs->isis_auth);
+	init_item_list(&tlvs->isis_auth);
+
 	if (passwd->type == ISIS_PASSWD_TYPE_UNUSED)
 		return;
 
@@ -2457,17 +2571,21 @@ void isis_tlvs_add_mt_router_info(struct isis_tlvs *tlvs, uint16_t mtid,
 	append_item(&tlvs->mt_router_info, (struct isis_item*)i);
 }
 
+void isis_tlvs_add_ipv4_address(struct isis_tlvs *tlvs, struct in_addr *addr)
+{
+	struct isis_ipv4_address *a = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*a));
+	a->addr = *addr;
+	append_item(&tlvs->ipv4_address, (struct isis_item*)a);
+}
+
+
 void isis_tlvs_add_ipv4_addresses(struct isis_tlvs *tlvs, struct list *addresses)
 {
 	struct listnode *node;
 	struct prefix_ipv4 *ip_addr;
 
-	for (ALL_LIST_ELEMENTS_RO(addresses, node, ip_addr)) {
-		struct isis_ipv4_address *a = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*a));
-
-		a->addr = ip_addr->prefix;
-		append_item(&tlvs->ipv4_address, (struct isis_item*)a);
-	}
+	for (ALL_LIST_ELEMENTS_RO(addresses, node, ip_addr))
+		isis_tlvs_add_ipv4_address(tlvs, &ip_addr->prefix);
 }
 
 void isis_tlvs_add_ipv6_addresses(struct isis_tlvs *tlvs, struct list *addresses)
@@ -2484,26 +2602,38 @@ void isis_tlvs_add_ipv6_addresses(struct isis_tlvs *tlvs, struct list *addresses
 }
 
 typedef bool(*auth_validator_func)(struct isis_passwd *passwd, struct stream *stream,
-                                   struct isis_auth *auth);
+                                   struct isis_auth *auth, bool is_lsp);
 
 static bool auth_validator_cleartxt(struct isis_passwd *passwd,
-                                    struct stream *stream, struct isis_auth *auth)
+                                    struct stream *stream, struct isis_auth *auth,
+                                    bool is_lsp)
 {
 	return (auth->length == passwd->len
 	        && !memcmp(auth->value, passwd->passwd, passwd->len));
 }
 
 static bool auth_validator_hmac_md5(struct isis_passwd *passwd,
-                                    struct stream *stream, struct isis_auth *auth)
+                                    struct stream *stream, struct isis_auth *auth,
+                                    bool is_lsp)
 {
 	uint8_t digest[16];
+	uint16_t checksum;
+	uint16_t rem_lifetime;
+
+	if (is_lsp)
+		safe_auth_md5(stream, &checksum, &rem_lifetime);
 
 	memset(STREAM_DATA(stream) + auth->offset, 0, 16);
 	hmac_md5(STREAM_DATA(stream), stream_get_endp(stream),
 	         passwd->passwd, passwd->len, digest);
 	memcpy(STREAM_DATA(stream) + auth->offset, auth->value, 16);
 
-	return (!memcmp(digest, auth->value, 16));
+	bool rv = !memcmp(digest, auth->value, 16);
+
+	if (is_lsp)
+		restore_auth_md5(stream, checksum, rem_lifetime);
+
+	return rv;
 }
 
 static const auth_validator_func auth_validators[] = {
@@ -2511,8 +2641,8 @@ static const auth_validator_func auth_validators[] = {
 	[ISIS_PASSWD_TYPE_HMAC_MD5] = auth_validator_hmac_md5,
 };
 
-bool isis_tlvs_auth_is_valid(struct isis_tlvs *tlvs,
-                             struct isis_passwd *passwd, struct stream *stream)
+bool isis_tlvs_auth_is_valid(struct isis_tlvs *tlvs, struct isis_passwd *passwd,
+                             struct stream *stream, bool is_lsp)
 {
 	/* If no auth is set, always pass authentication */
 	if (!passwd->type)
@@ -2535,7 +2665,7 @@ bool isis_tlvs_auth_is_valid(struct isis_tlvs *tlvs,
 		return false;
 
 	/* Perform validation and return result */
-	return auth_validators[passwd->type](passwd, stream, auth);
+	return auth_validators[passwd->type](passwd, stream, auth, is_lsp);
 }
 
 bool isis_tlvs_area_addresses_match(struct isis_tlvs *tlvs, struct list *addresses)
@@ -2708,10 +2838,10 @@ void isis_tlvs_add_lsp_entry(struct isis_tlvs *tlvs, struct isis_lsp *lsp)
 {
 	struct isis_lsp_entry *entry = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*entry));
 
-	entry->rem_lifetime = ntohs(lsp->lsp_header->rem_lifetime);
-	memcpy(entry->id, lsp->lsp_header->lsp_id, ISIS_SYS_ID_LEN + 2);
-	entry->checksum = ntohs(lsp->lsp_header->checksum);
-	entry->seqno = ntohl(lsp->lsp_header->seq_num);
+	entry->rem_lifetime = lsp->hdr.rem_lifetime;
+	memcpy(entry->id, lsp->hdr.lsp_id, ISIS_SYS_ID_LEN + 2);
+	entry->checksum = lsp->hdr.checksum;
+	entry->seqno = lsp->hdr.seqno;
 	entry->lsp = lsp;
 
 	append_item(&tlvs->lsp_entries, (struct isis_item*)entry);
@@ -2743,3 +2873,108 @@ void isis_tlvs_add_csnp_entries(struct isis_tlvs *tlvs,
 		break;
 	}
 }
+
+void isis_tlvs_set_dynamic_hostname(struct isis_tlvs *tlvs,
+                                    const char *hostname)
+{
+	XFREE(MTYPE_ISIS_TLV2, tlvs->hostname);
+	if (hostname)
+		tlvs->hostname = XSTRDUP(MTYPE_ISIS_TLV2, hostname);
+}
+
+void isis_tlvs_set_te_router_id(struct isis_tlvs *tlvs,
+                                const struct in_addr *id)
+{
+	XFREE(MTYPE_ISIS_TLV2, tlvs->te_router_id);
+	if (!id)
+		return;
+	tlvs->te_router_id = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*id));
+	memcpy(tlvs->te_router_id, id, sizeof(*id));
+}
+
+void isis_tlvs_add_oldstyle_ip_reach(struct isis_tlvs *tlvs,
+                                     struct prefix_ipv4 *dest, uint8_t metric)
+{
+	struct isis_oldstyle_ip_reach *r = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*r));
+
+	r->metric = metric;
+	memcpy(&r->prefix, dest, sizeof(*dest));
+	apply_mask_ipv4(&r->prefix);
+	append_item(&tlvs->oldstyle_ip_reach, (struct isis_item*)r);
+}
+
+void isis_tlvs_add_extended_ip_reach(struct isis_tlvs *tlvs,
+                                     struct prefix_ipv4 *dest, uint32_t metric)
+{
+	struct isis_extended_ip_reach *r = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*r));
+
+	r->metric = metric;
+	memcpy(&r->prefix, dest, sizeof(*dest));
+	apply_mask_ipv4(&r->prefix);
+	append_item(&tlvs->extended_ip_reach, (struct isis_item*)r);
+}
+
+void isis_tlvs_add_ipv6_reach(struct isis_tlvs *tlvs, uint16_t mtid,
+                              struct prefix_ipv6 *dest, uint32_t metric)
+{
+	struct isis_ipv6_reach *r = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*r));
+
+	r->metric = metric;
+	memcpy(&r->prefix, dest, sizeof(*dest));
+	apply_mask_ipv6(&r->prefix);
+
+	struct isis_item_list *l;
+	l = (mtid == ISIS_MT_IPV4_UNICAST) ? &tlvs->ipv6_reach
+	                                   : isis_get_mt_items(&tlvs->mt_ipv6_reach,
+	                                                       mtid);
+	append_item(l, (struct isis_item*)r);
+}
+
+void isis_tlvs_add_oldstyle_reach(struct isis_tlvs *tlvs,
+                                  uint8_t *id, uint8_t metric)
+{
+	struct isis_oldstyle_reach *r = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*r));
+
+	r->metric = metric;
+	memcpy(r->id, id, sizeof(r->id));
+	append_item(&tlvs->oldstyle_reach, (struct isis_item*)r);
+}
+
+void isis_tlvs_add_extended_reach(struct isis_tlvs *tlvs, uint16_t mtid,
+                                  uint8_t *id, uint32_t metric,
+                                  uint8_t *subtlvs, uint8_t subtlv_len)
+{
+	struct isis_extended_reach *r = XCALLOC(MTYPE_ISIS_TLV2, sizeof(*r));
+
+	memcpy(r->id, id, sizeof(r->id));
+	r->metric = metric;
+	if (subtlvs && subtlv_len) {
+		r->subtlvs = XCALLOC(MTYPE_ISIS_TLV2, subtlv_len);
+		memcpy(r->subtlvs, subtlvs, subtlv_len);
+		r->subtlv_len = subtlv_len;
+	}
+
+	struct isis_item_list *l;
+	if (mtid == ISIS_MT_IPV4_UNICAST)
+		l = &tlvs->extended_reach;
+	else
+		l = isis_get_mt_items(&tlvs->mt_reach, mtid);
+	append_item(l, (struct isis_item*)r);
+}
+
+struct isis_mt_router_info *isis_tlvs_lookup_mt_router_info(
+                                       struct isis_tlvs *tlvs, uint16_t mtid)
+{
+	if (tlvs->mt_router_info_empty)
+		return NULL;
+
+	struct isis_mt_router_info *rv;
+	for (rv = (struct isis_mt_router_info*)tlvs->mt_router_info.head;
+	     rv; rv = rv->next) {
+		if (rv->mtid == mtid)
+			return rv;
+	}
+
+	return NULL;
+}
+

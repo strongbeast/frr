@@ -43,7 +43,6 @@
 #include "isisd/isis_dr.h"
 #include "isisd/isis_dynhn.h"
 #include "isisd/isis_pdu.h"
-#include "isisd/isis_tlv.h"
 #include "isisd/isis_lsp.h"
 #include "isisd/isis_spf.h"
 #include "isisd/isis_events.h"
@@ -196,7 +195,7 @@ isis_adj_state_change (struct isis_adjacency *adj, enum isis_adj_state new_state
 
       dyn = dynhn_find_by_id (adj->sysid);
       if (dyn)
-	adj_name = (const char *)dyn->name.name;
+	adj_name = dyn->hostname;
       else
 	adj_name = sysid_print (adj->sysid);
 
@@ -312,7 +311,7 @@ isis_adj_print (struct isis_adjacency *adj)
     return;
   dyn = dynhn_find_by_id (adj->sysid);
   if (dyn)
-    zlog_debug ("%s", dyn->name.name);
+    zlog_debug ("%s", dyn->hostname);
 
   zlog_debug ("SystemId %20s SNPA %s, level %d\nHolding Time %d",
               sysid_print (adj->sysid), snpa_print (adj->snpa),
@@ -369,7 +368,7 @@ isis_adj_print_vty (struct isis_adjacency *adj, struct vty *vty, char detail)
 
   dyn = dynhn_find_by_id (adj->sysid);
   if (dyn)
-    vty_out (vty, "  %-20s", dyn->name.name);
+    vty_out (vty, "  %-20s", dyn->hostname);
   else
     vty_out (vty, "  %-20s", sysid_print (adj->sysid));
 
@@ -426,7 +425,7 @@ isis_adj_print_vty (struct isis_adjacency *adj, struct vty *vty, char detail)
         dyn = dynhn_find_by_id (adj->lanid);
         if (dyn)
           vty_out (vty, ", LAN id: %s.%02x",
-              dyn->name.name, adj->lanid[ISIS_SYS_ID_LEN]);
+              dyn->hostname, adj->lanid[ISIS_SYS_ID_LEN]);
         else
           vty_out (vty, ", LAN id: %s.%02x",
               sysid_print (adj->lanid), adj->lanid[ISIS_SYS_ID_LEN]);

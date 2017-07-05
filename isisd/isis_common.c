@@ -2,6 +2,7 @@
 
 #include "lib/log_int.h"
 #include "lib/memory.h"
+#include "lib/vty.h"
 
 #include "isis_common.h"
 
@@ -36,35 +37,72 @@ const char *isis_format_id(uint8_t *id, size_t len)
 	return rv;
 }
 
-void log_multiline(int priority, const char *prefix, const char *format, ...)
+static char *qasprintf(const char *format, va_list ap)
 {
+	va_list aq;
+	va_copy(aq, ap);
+
 	int size = 0;
 	char *p = NULL;
-	va_list ap;
 
-	va_start(ap, format);
 	size = vsnprintf(p, size, format, ap);
-	va_end(ap);
 
-	if (size < 0)
-		return;
+	if (size < 0) {
+		va_end(aq);
+		return NULL;
+	}
 
 	size++;
 	p = XMALLOC(MTYPE_TMP, size);
 
-	va_start(ap, format);
-	size = vsnprintf(p, size, format, ap);
-	va_end(ap);
+	size = vsnprintf(p, size, format, aq);
+	va_end(aq);
 
 	if (size < 0) {
 		XFREE(MTYPE_TMP, p);
-		return;
+		return NULL;
 	}
+
+	return p;
+}
+
+void log_multiline(int priority, const char *prefix, const char *format, ...)
+{
+	va_list ap;
+	char *p;
+
+	va_start(ap, format);
+	p = qasprintf(format, ap);
+	va_end(ap);
+
+	if (!p)
+		return;
 
 	char *saveptr = NULL;
 	for (char *line = strtok_r(p, "\n", &saveptr); line;
 	     line = strtok_r(NULL, "\n", &saveptr)) {
 	       zlog(priority, "%s%s", prefix, line);
+	}
+
+	XFREE(MTYPE_TMP, p);
+}
+
+void vty_multiline(struct vty *vty, const char *prefix, const char *format, ...)
+{
+	va_list ap;
+	char *p;
+
+	va_start(ap, format);
+	p = qasprintf(format, ap);
+	va_end(ap);
+
+	if (!p)
+		return;
+
+	char *saveptr = NULL;
+	for (char *line = strtok_r(p, "\n", &saveptr); line;
+	     line = strtok_r(NULL, "\n", &saveptr)) {
+	       vty_out(vty, "%s%s%s", prefix, line, VTY_NEWLINE);
 	}
 
 	XFREE(MTYPE_TMP, p);

@@ -48,7 +48,6 @@
 #include "isisd/isis_flags.h"
 #include "isisd/isis_circuit.h"
 #include "isisd/isisd.h"
-#include "isisd/isis_tlv.h"
 #include "isisd/isis_lsp.h"
 #include "isisd/isis_pdu.h"
 #include "isisd/isis_dynhn.h"
@@ -102,10 +101,10 @@ mpls_te_circuit_new()
 
 /* Copy SUB TLVs parameters into a buffer - No space verification are performed */
 /* Caller must verify before that there is enough free space in the buffer */
-u_char
-add_te_subtlvs(u_char *buf, struct mpls_te_circuit *mtc)
+uint8_t
+add_te_subtlvs(uint8_t *buf, struct mpls_te_circuit *mtc)
 {
-  u_char size, *tlvs = buf;
+  uint8_t size, *tlvs = buf;
 
   zlog_debug ("ISIS MPLS-TE: Add TE Sub TLVs to buffer");
 
@@ -251,7 +250,7 @@ add_te_subtlvs(u_char *buf, struct mpls_te_circuit *mtc)
 }
 
 /* Compute total Sub-TLVs size */
-u_char
+uint8_t
 subtlvs_len (struct mpls_te_circuit *mtc)
 {
   int length = 0;
@@ -327,7 +326,7 @@ subtlvs_len (struct mpls_te_circuit *mtc)
       return 0;
     }
 
-  mtc->length = (u_char)length;
+  mtc->length = (uint8_t)length;
 
   return mtc->length;
 }
@@ -989,16 +988,13 @@ show_vty_unknown_tlv (struct vty *vty, struct subtlv_header *tlvh)
 
 /* Main Show function */
 void
-mpls_te_print_detail(struct vty *vty, struct te_is_neigh *te)
+mpls_te_print_detail(struct vty *vty, uint8_t *subtlvs, uint8_t subtlv_len)
 {
-  struct subtlv_header *tlvh;
-  u_int16_t sum = 0;
+  struct subtlv_header *tlvh = (struct subtlv_header*)subtlvs;
+  uint16_t sum = 0;
 
   zlog_debug ("ISIS MPLS-TE: Show database TE detail");
-
-  tlvh = (struct subtlv_header *)te->sub_tlvs;
-
-  for (; sum < te->sub_tlvs_length; tlvh = SUBTLV_HDR_NEXT (tlvh))
+  for (; sum < subtlv_len; tlvh = SUBTLV_HDR_NEXT(tlvh))
     {
       switch (tlvh->type)
       {

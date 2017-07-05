@@ -38,7 +38,6 @@
 #include "isisd/isisd.h"
 #include "isisd/isis_misc.h"
 
-#include "isisd/isis_tlv.h"
 #include "isisd/isis_lsp.h"
 #include "isisd/isis_constants.h"
 #include "isisd/isis_adjacency.h"
@@ -248,27 +247,6 @@ nlpid2string (struct nlpids *nlpids)
   *(pos) = '\0';
 
   return nlpidstring;
-}
-
-/*
- *  supports the given af ?
- */
-int
-speaks (struct nlpids *nlpids, int family)
-{
-  int i, speaks = 0;
-
-  if (nlpids == (struct nlpids *) NULL)
-    return speaks;
-  for (i = 0; i < nlpids->count; i++)
-    {
-      if (family == AF_INET && nlpids->nlpids[i] == NLPID_IP)
-	speaks = 1;
-      if (family == AF_INET6 && nlpids->nlpids[i] == NLPID_IPV6)
-	speaks = 1;
-    }
-
-  return speaks;
 }
 
 /*
@@ -567,7 +545,7 @@ print_sys_hostname (const u_char *sysid)
 
   dyn = dynhn_find_by_id (sysid);
   if (dyn)
-    return (const char *)dyn->name.name;
+    return dyn->hostname;
 
   return sysid_print (sysid);
 }

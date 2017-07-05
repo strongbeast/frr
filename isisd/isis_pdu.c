@@ -44,7 +44,6 @@
 #include "isisd/isis_network.h"
 #include "isisd/isis_misc.h"
 #include "isisd/isis_dr.h"
-#include "isisd/isis_tlv.h"
 #include "isisd/isisd.h"
 #include "isisd/isis_dynhn.h"
 #include "isisd/isis_lsp.h"
@@ -56,137 +55,40 @@
 #include "isisd/isis_mt.h"
 #include "isisd/isis_tlvs2.h"
 
-#define ISIS_MINIMUM_FIXED_HDR_LEN 15
-#define ISIS_MIN_PDU_LEN           13	/* partial seqnum pdu with id_len=2 */
-
-#ifndef PNBBY
-#define PNBBY 8
-#endif /* PNBBY */
-
-/*
- * HELPER FUNCS
- */
-
-/*
- * Checks whether we should accept a PDU of given level 
- */
 static int
-accept_level (int level, int circuit_t)
+ack_lsp (struct isis_lsp_hdr *hdr, struct isis_circuit *circuit,
+	 int level)
 {
-  int retval = ((circuit_t & level) == level);	/* simple approach */
+  unsigned long lenp;
+  int retval;
+  u_int16_t length;
+  uint8_t pdu_type = (level == IS_LEVEL_1) ? L1_PARTIAL_SEQ_NUM : L2_PARTIAL_SEQ_NUM;
 
-  return retval;
-}
+  isis_circuit_stream(circuit, &circuit->snd_stream);
 
-/*
- * Verify authentication information
- * Support cleartext and HMAC MD5 authentication
- */
-static int
-authentication_check (struct isis_passwd *remote, struct isis_passwd *local,
-                      struct stream *stream, uint32_t auth_tlv_offset)
-{
-  unsigned char digest[ISIS_AUTH_MD5_SIZE];
+  fill_fixed_hdr(pdu_type, circuit->snd_stream);
 
-  /* Auth fail () - passwd type mismatch */
-  if (local->type != remote->type)
-    return ISIS_ERROR;
+  lenp = stream_get_endp (circuit->snd_stream);
+  stream_putw (circuit->snd_stream, 0);	/* PDU length  */
+  stream_put (circuit->snd_stream, isis->sysid, ISIS_SYS_ID_LEN);
+  stream_putc (circuit->snd_stream, circuit->idx);
+  stream_putc (circuit->snd_stream, 9);	/* code */
+  stream_putc (circuit->snd_stream, 16);	/* len */
 
-  switch (local->type)
-  {
-    /* No authentication required */
-    case ISIS_PASSWD_TYPE_UNUSED:
-      break;
+  stream_putw (circuit->snd_stream, hdr->rem_lifetime);
+  stream_put (circuit->snd_stream, hdr->lsp_id, ISIS_SYS_ID_LEN + 2);
+  stream_putl (circuit->snd_stream, hdr->seqno);
+  stream_putw (circuit->snd_stream, hdr->checksum);
 
-    /* Cleartext (ISO 10589) */
-    case ISIS_PASSWD_TYPE_CLEARTXT:
-      /* Auth fail () - passwd len mismatch */
-      if (remote->len != local->len)
-        return ISIS_ERROR;
-      return memcmp (local->passwd, remote->passwd, local->len);
+  length = (u_int16_t) stream_get_endp (circuit->snd_stream);
+  /* Update PDU length */
+  stream_putw_at (circuit->snd_stream, lenp, length);
 
-    /* HMAC MD5 (RFC 3567) */
-    case ISIS_PASSWD_TYPE_HMAC_MD5:
-      /* Auth fail () - passwd len mismatch */
-      if (remote->len != ISIS_AUTH_MD5_SIZE)
-        return ISIS_ERROR;
-      /* Set the authentication value to 0 before the check */
-      memset (STREAM_DATA (stream) + auth_tlv_offset + 3, 0,
-              ISIS_AUTH_MD5_SIZE);
-      /* Compute the digest */
-      hmac_md5 (STREAM_DATA (stream), stream_get_endp (stream),
-                (unsigned char *) &(local->passwd), local->len,
-                (unsigned char *) &digest);
-      /* Copy back the authentication value after the check */
-      memcpy (STREAM_DATA (stream) + auth_tlv_offset + 3,
-              remote->passwd, ISIS_AUTH_MD5_SIZE);
-      return memcmp (digest, remote->passwd, ISIS_AUTH_MD5_SIZE);
-
-    default:
-      zlog_err ("Unsupported authentication type");
-      return ISIS_ERROR;
-  }
-
-  /* Authentication pass when no authentication is configured */
-  return ISIS_OK;
-}
-
-static int
-lsp_authentication_check (struct stream *stream, struct isis_area *area,
-                          int level, struct isis_passwd *passwd)
-{
-  struct isis_link_state_hdr *hdr;
-  uint32_t expected = 0, found = 0, auth_tlv_offset = 0;
-  uint16_t checksum, rem_lifetime, pdu_len;
-  struct tlvs tlvs;
-  int retval = ISIS_OK;
-
-  hdr = (struct isis_link_state_hdr *) (STREAM_PNT (stream));
-  pdu_len = ntohs (hdr->pdu_len);
-  expected |= TLVFLAG_AUTH_INFO;
-  auth_tlv_offset = stream_get_getp (stream) + ISIS_LSP_HDR_LEN;
-  retval = parse_tlvs (area->area_tag, STREAM_PNT (stream) + ISIS_LSP_HDR_LEN,
-                       pdu_len - ISIS_FIXED_HDR_LEN - ISIS_LSP_HDR_LEN,
-                       &expected, &found, &tlvs, &auth_tlv_offset);
-
+  retval = circuit->tx (circuit, level);
   if (retval != ISIS_OK)
-    {
-      zlog_err ("ISIS-Upd (%s): Parse failed L%d LSP %s, seq 0x%08x, "
-                "cksum 0x%04x, lifetime %us, len %u",
-                area->area_tag, level, rawlspid_print (hdr->lsp_id),
-                ntohl (hdr->seq_num), ntohs (hdr->checksum),
-                ntohs (hdr->rem_lifetime), pdu_len);
-      if ((isis->debugs & DEBUG_UPDATE_PACKETS) &&
-          (isis->debugs & DEBUG_PACKET_DUMP))
-        zlog_dump_data (STREAM_DATA (stream), stream_get_endp (stream));
-      return retval;
-    }
-
-  if (!(found & TLVFLAG_AUTH_INFO))
-    {
-      zlog_err ("No authentication tlv in LSP");
-      return ISIS_ERROR;
-    }
-
-  if (tlvs.auth_info.type != ISIS_PASSWD_TYPE_CLEARTXT &&
-      tlvs.auth_info.type != ISIS_PASSWD_TYPE_HMAC_MD5)
-    {
-      zlog_err ("Unknown authentication type in LSP");
-      return ISIS_ERROR;
-    }
-
-  /*
-   * RFC 5304 set checksum and remaining lifetime to zero before
-   * verification and reset to old values after verification.
-   */
-  checksum = hdr->checksum;
-  rem_lifetime = hdr->rem_lifetime;
-  hdr->checksum = 0;
-  hdr->rem_lifetime = 0;
-  retval = authentication_check (&tlvs.auth_info, passwd, stream,
-                                 auth_tlv_offset);
-  hdr->checksum = checksum;
-  hdr->rem_lifetime = rem_lifetime;
+    zlog_err ("ISIS-Upd (%s): Send L%d LSP PSNP on %s failed",
+              circuit->area->area_tag, level,
+              circuit->interface->name);
 
   return retval;
 }
@@ -703,7 +605,7 @@ process_hello(uint8_t pdu_type, struct isis_circuit *circuit, u_char *ssnpa)
           return ISIS_WARNING;
         }
 
-      if (!accept_level (level, circuit->is_type))
+      if (!(circuit->is_type & level))
         {
           if (isis->debugs & DEBUG_ADJ_PACKETS)
             {
@@ -774,7 +676,7 @@ process_hello(uint8_t pdu_type, struct isis_circuit *circuit, u_char *ssnpa)
       goto out;
     }
 
-  if (!isis_tlvs_auth_is_valid(iih.tlvs, &circuit->passwd, circuit->rcv_stream))
+  if (!isis_tlvs_auth_is_valid(iih.tlvs, &circuit->passwd, circuit->rcv_stream, false))
     {
       isis_event_auth_failure (circuit->area->area_tag,
                                "IIH authentication failure",
@@ -827,16 +729,10 @@ out:
  * Section 7.3.15.1 - Action on receipt of a link state PDU
  */
 static int
-process_lsp (int level, struct isis_circuit *circuit, const u_char *ssnpa)
+process_lsp(uint8_t pdu_type, struct isis_circuit *circuit, const u_char *ssnpa)
 {
-  struct isis_link_state_hdr *hdr;
-  struct isis_adjacency *adj = NULL;
-  struct isis_lsp *lsp, *lsp0 = NULL;
-  int retval = ISIS_OK, comp = 0;
-  u_char lspid[ISIS_SYS_ID_LEN + 2];
-  struct isis_passwd *passwd;
-  uint16_t pdu_len;
-  int lsp_confusion;
+  int level = (pdu_type == L1_LINK_STATE) ? ISIS_LEVEL1
+                                          : ISIS_LEVEL2;
 
   if (isis->debugs & DEBUG_UPDATE_PACKETS)
     {
@@ -848,95 +744,80 @@ process_lsp (int level, struct isis_circuit *circuit, const u_char *ssnpa)
                         stream_get_endp (circuit->rcv_stream));
     }
 
-  if ((stream_get_endp (circuit->rcv_stream) -
-       stream_get_getp (circuit->rcv_stream)) < ISIS_LSP_HDR_LEN)
+  struct isis_lsp_hdr hdr = {};
+
+  hdr.pdu_len = stream_getw(circuit->rcv_stream);
+  hdr.rem_lifetime = stream_getw(circuit->rcv_stream);
+  stream_get(hdr.lsp_id, circuit->rcv_stream, sizeof(hdr.lsp_id));
+  hdr.seqno = stream_getl(circuit->rcv_stream);
+  hdr.checksum = stream_getw(circuit->rcv_stream);
+  hdr.lsp_bits = stream_getc(circuit->rcv_stream);
+
+  if (pdu_len_validate(hdr.pdu_len, circuit))
     {
-      zlog_warn ("Packet too short");
+      zlog_debug ("ISIS-Upd (%s): LSP %s invalid LSP length %" PRIu16,
+                  circuit->area->area_tag, rawlspid_print(hdr.lsp_id),
+                  hdr.pdu_len);
       return ISIS_WARNING;
     }
-
-  /* Reference the header   */
-  hdr = (struct isis_link_state_hdr *) STREAM_PNT (circuit->rcv_stream);
-  pdu_len = ntohs (hdr->pdu_len);
-
-  /* lsp length check */
-  if (pdu_len < (ISIS_FIXED_HDR_LEN + ISIS_LSP_HDR_LEN) ||
-      pdu_len > ISO_MTU(circuit) ||
-      pdu_len > stream_get_endp (circuit->rcv_stream))
-    {
-      zlog_debug ("ISIS-Upd (%s): LSP %s invalid LSP length %d",
-		  circuit->area->area_tag,
-		  rawlspid_print (hdr->lsp_id), pdu_len);
-
-      return ISIS_WARNING;
-    }
-
-  /*
-   * Set the stream endp to PDU length, ignoring additional padding
-   * introduced by transport chips.
-   */
-  if (pdu_len < stream_get_endp (circuit->rcv_stream))
-    stream_set_endp (circuit->rcv_stream, pdu_len);
 
   if (isis->debugs & DEBUG_UPDATE_PACKETS)
     {
-      zlog_debug ("ISIS-Upd (%s): Rcvd L%d LSP %s, seq 0x%08x, cksum 0x%04x, "
-		  "lifetime %us, len %u, on %s",
-		  circuit->area->area_tag,
-		  level,
-		  rawlspid_print (hdr->lsp_id),
-		  ntohl (hdr->seq_num),
-		  ntohs (hdr->checksum),
-		  ntohs (hdr->rem_lifetime),
-		  pdu_len,
-		  circuit->interface->name);
+      zlog_debug("ISIS-Upd (%s): Rcvd L%d LSP %s, seq 0x%08" PRIx32
+                 ", cksum 0x%04" PRIx16 ", lifetime %" PRIu16 "s"
+                 ", len %" PRIu16 ", on %s",
+                 circuit->area->area_tag, level, rawlspid_print(hdr.lsp_id),
+                 hdr.seqno, hdr.checksum, hdr.rem_lifetime, hdr.pdu_len,
+                 circuit->interface->name);
     }
 
   /* lsp is_type check */
-  if ((hdr->lsp_bits & IS_LEVEL_1_AND_2) != IS_LEVEL_1 &&
-      (hdr->lsp_bits & IS_LEVEL_1_AND_2) != IS_LEVEL_1_AND_2)
+  if ((hdr.lsp_bits & IS_LEVEL_1) != IS_LEVEL_1)
     {
-      zlog_debug ("ISIS-Upd (%s): LSP %s invalid LSP is type %x",
-		  circuit->area->area_tag,
-		  rawlspid_print (hdr->lsp_id), hdr->lsp_bits);
+      zlog_debug("ISIS-Upd (%s): LSP %s invalid LSP is type 0x%" PRIx8,
+                 circuit->area->area_tag, rawlspid_print(hdr.lsp_id),
+                 hdr.lsp_bits & IS_LEVEL_1_AND_2);
       /* continue as per RFC1122 Be liberal in what you accept, and
        * conservative in what you send */
     }
 
   /* Checksum sanity check - FIXME: move to correct place */
   /* 12 = sysid+pdu+remtime */
-  if (iso_csum_verify (STREAM_PNT (circuit->rcv_stream) + 4,
-		       pdu_len - 12, hdr->checksum,
-		       offsetof(struct isis_link_state_hdr, checksum) - 4))
+  if (iso_csum_verify(STREAM_DATA(circuit->rcv_stream) + 12,
+                      hdr.pdu_len - 12, hdr.checksum, 12))
     {
-      zlog_debug ("ISIS-Upd (%s): LSP %s invalid LSP checksum 0x%04x",
-		  circuit->area->area_tag,
-		  rawlspid_print (hdr->lsp_id), ntohs (hdr->checksum));
-
+      zlog_debug("ISIS-Upd (%s): LSP %s invalid LSP checksum 0x%04" PRIx16,
+                 circuit->area->area_tag, rawlspid_print(hdr.lsp_id), hdr.checksum);
       return ISIS_WARNING;
     }
 
   /* 7.3.15.1 a) 1 - external domain circuit will discard lsps */
   if (circuit->ext_domain)
     {
-      zlog_debug
-	("ISIS-Upd (%s): LSP %s received at level %d over circuit with "
-	 "externalDomain = true", circuit->area->area_tag,
-	 rawlspid_print (hdr->lsp_id), level);
-
+      zlog_debug("ISIS-Upd (%s): LSP %s received at level %d over circuit with "
+                 "externalDomain = true", circuit->area->area_tag,
+                 rawlspid_print(hdr.lsp_id), level);
       return ISIS_WARNING;
     }
 
   /* 7.3.15.1 a) 2,3 - manualL2OnlyMode not implemented */
-  if (!accept_level (level, circuit->is_type))
+  if (!(circuit->is_type & level))
     {
-      zlog_debug ("ISIS-Upd (%s): LSP %s received at level %d over circuit of"
-		  " type %s",
-		  circuit->area->area_tag,
-		  rawlspid_print (hdr->lsp_id),
-		  level, circuit_t2string (circuit->is_type));
-
+      zlog_debug("ISIS-Upd (%s): LSP %s received at level %d over circuit of"
+                 " type %s", circuit->area->area_tag, rawlspid_print(hdr.lsp_id),
+                 level, circuit_t2string (circuit->is_type));
       return ISIS_WARNING;
+    }
+
+  struct isis_tlvs *tlvs = NULL;
+  int retval = ISIS_WARNING;
+  const char *error_log;
+
+  if (isis_unpack_tlvs(STREAM_READABLE(circuit->rcv_stream), circuit->rcv_stream,
+                       &tlvs, &error_log))
+    {
+      zlog_warn("Something went wrong unpacking the LSP: %s", error_log);
+      goto out;
     }
 
   /* 7.3.15.1 a) 4 - need to make sure IDLength matches */
@@ -944,23 +825,21 @@ process_lsp (int level, struct isis_circuit *circuit, const u_char *ssnpa)
   /* 7.3.15.1 a) 5 - maximum area match, can be ommited since we only use 3 */
 
   /* 7.3.15.1 a) 7 - password check */
-  (level == IS_LEVEL_1) ? (passwd = &circuit->area->area_passwd) :
-                          (passwd = &circuit->area->domain_passwd);
-  if (passwd->type)
+  struct isis_passwd *passwd = (level == ISIS_LEVEL1) ? &circuit->area->area_passwd
+                                                      : &circuit->area->domain_passwd;
+  if (!isis_tlvs_auth_is_valid(tlvs, passwd, circuit->rcv_stream, true))
     {
-      if (lsp_authentication_check (circuit->rcv_stream, circuit->area,
-                                    level, passwd))
-	{
-	  isis_event_auth_failure (circuit->area->area_tag,
-				   "LSP authentication failure", hdr->lsp_id);
-	  return ISIS_WARNING;
-	}
+      isis_event_auth_failure(circuit->area->area_tag,
+                              "LSP authentication failure", hdr.lsp_id);
+      goto out;
     }
+
   /* Find the LSP in our database and compare it to this Link State header */
-  lsp = lsp_search (hdr->lsp_id, circuit->area->lspdb[level - 1]);
+  struct isis_lsp *lsp = lsp_search(hdr.lsp_id, circuit->area->lspdb[level - 1]);
+  int comp = 0;
   if (lsp)
-    comp = lsp_compare (circuit->area->area_tag, lsp, ntohl(hdr->seq_num),
-			ntohs(hdr->checksum), ntohs(hdr->rem_lifetime));
+    comp = lsp_compare(circuit->area->area_tag, lsp, hdr.seqno,
+                       hdr.checksum, hdr.rem_lifetime);
   if (lsp && (lsp->own_lsp))
     goto dontcheckadj;
 
@@ -969,36 +848,36 @@ process_lsp (int level, struct isis_circuit *circuit, const u_char *ssnpa)
 
   if (circuit->circ_type == CIRCUIT_T_BROADCAST)
     {
-      adj = isis_adj_lookup_snpa (ssnpa, circuit->u.bc.adjdb[level - 1]);
-      if (!adj)
-	{
-	  zlog_debug ("(%s): DS ======= LSP %s, seq 0x%08x, cksum 0x%04x, "
-		      "lifetime %us on %s",
-		      circuit->area->area_tag,
-		      rawlspid_print (hdr->lsp_id),
-		      ntohl (hdr->seq_num),
-		      ntohs (hdr->checksum),
-		      ntohs (hdr->rem_lifetime), circuit->interface->name);
-	  return ISIS_WARNING;	/* Silently discard */
-	}
+      if (!isis_adj_lookup_snpa (ssnpa, circuit->u.bc.adjdb[level - 1]))
+        {
+          zlog_debug("(%s): DS ======= LSP %s, seq 0x%08" PRIx32
+                     ", cksum 0x%04" PRIx16 ", lifetime %" PRIu16 "s on %s",
+                      circuit->area->area_tag, rawlspid_print(hdr.lsp_id),
+                      hdr.seqno, hdr.checksum, hdr.rem_lifetime,
+                      circuit->interface->name);
+          goto out;        /* Silently discard */
+        }
     }
   /* for non broadcast, we just need to find same level adj */
   else
     {
       /* If no adj, or no sharing of level */
       if (!circuit->u.p2p.neighbor)
-	{
-	  return ISIS_OK;	/* Silently discard */
-	}
+        {
+          retval = ISIS_OK;
+          goto out;
+        }
       else
-	{
-	  if (((level == IS_LEVEL_1) &&
-	       (circuit->u.p2p.neighbor->adj_usage == ISIS_ADJ_LEVEL2)) ||
-	      ((level == IS_LEVEL_2) &&
-	       (circuit->u.p2p.neighbor->adj_usage == ISIS_ADJ_LEVEL1)))
-	    return ISIS_WARNING;	/* Silently discard */
-	}
+        {
+          if (((level == IS_LEVEL_1) &&
+               (circuit->u.p2p.neighbor->adj_usage == ISIS_ADJ_LEVEL2)) ||
+              ((level == IS_LEVEL_2) &&
+               (circuit->u.p2p.neighbor->adj_usage == ISIS_ADJ_LEVEL1)))
+            goto out;
+        }
     }
+
+  bool lsp_confusion;
 
 dontcheckadj:
   /* 7.3.15.1 a) 7 - Passwords for level 1 - not implemented  */
@@ -1010,38 +889,41 @@ dontcheckadj:
   /* 7.3.16.2 - If this is an LSP from another IS with identical seq_num but
    *            wrong checksum, initiate a purge. */
   if (lsp
-      && (lsp->lsp_header->seq_num == hdr->seq_num)
-      && (lsp->lsp_header->checksum != hdr->checksum))
+      && (lsp->hdr.seqno == hdr.seqno)
+      && (lsp->hdr.checksum != hdr.checksum))
     {
-      zlog_warn("ISIS-Upd (%s): LSP %s seq 0x%08x with confused checksum received.",
-                circuit->area->area_tag, rawlspid_print(hdr->lsp_id),
-                ntohl(hdr->seq_num));
-      hdr->rem_lifetime = 0;
-      lsp_confusion = 1;
+      zlog_warn("ISIS-Upd (%s): LSP %s seq 0x%08" PRIx32
+                " with confused checksum received.",
+                circuit->area->area_tag, rawlspid_print(hdr.lsp_id),
+                hdr.seqno);
+      hdr.rem_lifetime = 0;
+      lsp_confusion = true;
     }
   else
-    lsp_confusion = 0;
+    lsp_confusion = false;
 
   /* 7.3.15.1 b) - If the remaining life time is 0, we perform 7.3.16.4 */
-  if (hdr->rem_lifetime == 0)
+  if (hdr.rem_lifetime == 0)
     {
       if (!lsp)
 	{
 	  /* 7.3.16.4 a) 1) No LSP in db -> send an ack, but don't save */
 	  /* only needed on explicit update, eg - p2p */
 	  if (circuit->circ_type == CIRCUIT_T_P2P)
-	    ack_lsp (hdr, circuit, level);
-	  return retval;	/* FIXME: do we need a purge? */
+	    ack_lsp(&hdr, circuit, level);
+	  goto out; /* FIXME: do we need a purge? */
 	}
       else
 	{
-	  if (memcmp (hdr->lsp_id, isis->sysid, ISIS_SYS_ID_LEN))
+	  if (memcmp (hdr.lsp_id, isis->sysid, ISIS_SYS_ID_LEN))
 	    {
 	      /* LSP by some other system -> do 7.3.16.4 b) */
 	      /* 7.3.16.4 b) 1)  */
 	      if (comp == LSP_NEWER)
 		{
-                  lsp_update (lsp, circuit->rcv_stream, circuit->area, level);
+                  lsp_update(lsp, &hdr, tlvs, circuit->rcv_stream,
+                             circuit->area, level);
+		  tlvs = NULL;
 		  /* ii */
                   lsp_set_all_srmflags (lsp);
 		  /* v */
@@ -1073,12 +955,12 @@ dontcheckadj:
 		  ISIS_CLEAR_FLAG (lsp->SSNflags, circuit);
 		}
 	    }
-          else if (lsp->lsp_header->rem_lifetime != 0)
+          else if (lsp->hdr.rem_lifetime != 0)
             {
               /* our own LSP -> 7.3.16.4 c) */
               if (comp == LSP_NEWER)
                 {
-                  lsp_inc_seqnum (lsp, ntohl (hdr->seq_num));
+                  lsp_inc_seqno(lsp, hdr.seqno);
                   lsp_set_all_srmflags (lsp);
                 }
               else
@@ -1088,22 +970,23 @@ dontcheckadj:
                 }
               if (isis->debugs & DEBUG_UPDATE_PACKETS)
                 zlog_debug ("ISIS-Upd (%s): (1) re-originating LSP %s new "
-                            "seq 0x%08x", circuit->area->area_tag,
-                            rawlspid_print (hdr->lsp_id),
-                            ntohl (lsp->lsp_header->seq_num));
+                            "seq 0x%08" PRIx32, circuit->area->area_tag,
+                            rawlspid_print(hdr.lsp_id),
+                            lsp->hdr.seqno);
             }
 	}
-      return retval;
+      goto out;
     }
   /* 7.3.15.1 c) - If this is our own lsp and we don't have it initiate a 
    * purge */
-  if (memcmp (hdr->lsp_id, isis->sysid, ISIS_SYS_ID_LEN) == 0)
+  if (memcmp(hdr.lsp_id, isis->sysid, ISIS_SYS_ID_LEN) == 0)
     {
       if (!lsp)
 	{
 	  /* 7.3.16.4: initiate a purge */
-	  lsp_purge_non_exist(level, hdr, circuit->area);
-	  return ISIS_OK;
+	  lsp_purge_non_exist(level, &hdr, circuit->area);
+	  retval = ISIS_OK;
+	  goto out;
 	}
       /* 7.3.15.1 d) - If this is our own lsp and we have it */
 
@@ -1111,15 +994,15 @@ dontcheckadj:
        * has information that the current sequence number for source S is
        * "greater" than that held by S, ... */
 
-      if (ntohl (hdr->seq_num) > ntohl (lsp->lsp_header->seq_num))
+      if (hdr.seqno > lsp->hdr.seqno)
 	{
 	  /* 7.3.16.1  */
-          lsp_inc_seqnum (lsp, ntohl (hdr->seq_num));
+          lsp_inc_seqno(lsp, hdr.seqno);
 	  if (isis->debugs & DEBUG_UPDATE_PACKETS)
 	    zlog_debug ("ISIS-Upd (%s): (2) re-originating LSP %s new seq "
-			"0x%08x", circuit->area->area_tag,
-			rawlspid_print (hdr->lsp_id),
-			ntohl (lsp->lsp_header->seq_num));
+			"0x%08" PRIx32, circuit->area->area_tag,
+			rawlspid_print(hdr.lsp_id),
+			lsp->hdr.seqno);
 	}
       /* If the received LSP is older or equal,
        * resend the LSP which will act as ACK */
@@ -1135,10 +1018,12 @@ dontcheckadj:
 	  /*
 	   * If this lsp is a frag, need to see if we have zero lsp present
 	   */
-	  if (LSP_FRAGMENT (hdr->lsp_id) != 0)
+	  struct isis_lsp *lsp0 = NULL;
+	  if (LSP_FRAGMENT (hdr.lsp_id) != 0)
 	    {
-	      memcpy (lspid, hdr->lsp_id, ISIS_SYS_ID_LEN + 1);
-	      LSP_FRAGMENT (lspid) = 0;
+	      uint8_t lspid[ISIS_SYS_ID_LEN + 2];
+	      memcpy(lspid, hdr.lsp_id, ISIS_SYS_ID_LEN + 1);
+	      LSP_FRAGMENT(lspid) = 0;
 	      lsp0 = lsp_search (lspid, circuit->area->lspdb[level - 1]);
 	      if (!lsp0)
 		{
@@ -1149,14 +1034,16 @@ dontcheckadj:
 	  /* i */
 	  if (!lsp)
             {
-	      lsp = lsp_new_from_stream_ptr (circuit->rcv_stream,
-                                             pdu_len, lsp0,
-                                             circuit->area, level);
+	      lsp = lsp_new_from_recv(&hdr, tlvs, circuit->rcv_stream,
+                                      lsp0, circuit->area, level);
+              tlvs = NULL;
               lsp_insert (lsp, circuit->area->lspdb[level - 1]);
             }
           else /* exists, so we overwrite */
             {
-              lsp_update (lsp, circuit->rcv_stream, circuit->area, level);
+              lsp_update(lsp, &hdr, tlvs, circuit->rcv_stream,
+                         circuit->area, level);
+	      tlvs = NULL;
             }
 	  /* ii */
           lsp_set_all_srmflags (lsp);
@@ -1172,7 +1059,9 @@ dontcheckadj:
       else if (comp == LSP_EQUAL)
 	{
 	  ISIS_CLEAR_FLAG (lsp->SRMflags, circuit);
-	  lsp_update (lsp, circuit->rcv_stream, circuit->area, level);
+	  lsp_update(lsp, &hdr, tlvs, circuit->rcv_stream,
+	             circuit->area, level);
+	  tlvs = NULL;
 	  if (circuit->circ_type != CIRCUIT_T_BROADCAST)
 	    ISIS_SET_FLAG (lsp->SSNflags, circuit);
 	}
@@ -1183,6 +1072,11 @@ dontcheckadj:
 	  ISIS_CLEAR_FLAG (lsp->SSNflags, circuit);
 	}
     }
+
+  retval = ISIS_OK;
+
+out:
+  isis_free_tlvs(tlvs);
   return retval;
 }
 
@@ -1246,9 +1140,8 @@ process_snp (uint8_t pdu_type, struct isis_circuit *circuit,
     }
 
   /* 7.3.15.2 a) 2,3 - manualL2OnlyMode not implemented */
-  if (!accept_level (level, circuit->is_type))
+  if (!(circuit->is_type & level))
     {
-
       zlog_debug ("ISIS-Snp (%s): Rcvd L%d %cSNP on %s, "
 		  "skipping: circuit type %s does not match level %d",
 		  circuit->area->area_tag,
@@ -1310,7 +1203,7 @@ process_snp (uint8_t pdu_type, struct isis_circuit *circuit,
   struct isis_passwd *passwd = (level == IS_LEVEL_1) ? &circuit->area->area_passwd
                                                      : &circuit->area->domain_passwd;
   if (CHECK_FLAG(passwd->snp_auth, SNP_AUTH_RECV)
-      && !isis_tlvs_auth_is_valid(tlvs, passwd, circuit->rcv_stream))
+      && !isis_tlvs_auth_is_valid(tlvs, passwd, circuit->rcv_stream, false))
     {
       isis_event_auth_failure(circuit->area->area_tag,
                               "SNP authentication failure",
@@ -1365,8 +1258,8 @@ process_snp (uint8_t pdu_type, struct isis_circuit *circuit,
             {
               if (own_lsp)
                 {
-                  lsp_inc_seqnum (lsp, entry->seqno);
-                  ISIS_SET_FLAG (lsp->SRMflags, circuit);
+                  lsp_inc_seqno(lsp, entry->seqno);
+                  ISIS_SET_FLAG(lsp->SRMflags, circuit);
                 }
               else
                 {
@@ -1411,7 +1304,7 @@ process_snp (uint8_t pdu_type, struct isis_circuit *circuit,
         {
           for (ALL_LIST_ELEMENTS(lsp_list, node, nnode, lsp))
             {
-              if (lsp_id_cmp(lsp->lsp_header->lsp_id, entry->id) == 0)
+              if (lsp_id_cmp(lsp->hdr.lsp_id, entry->id) == 0)
                 {
                   list_delete_node (lsp_list, node);
                   break;
@@ -1564,10 +1457,8 @@ isis_handle_pdu (struct isis_circuit *circuit, u_char * ssnpa)
       retval = process_hello(pdu_type, circuit, ssnpa);
       break;
     case L1_LINK_STATE:
-      retval = process_lsp (ISIS_LEVEL1, circuit, ssnpa);
-      break;
     case L2_LINK_STATE:
-      retval = process_lsp (ISIS_LEVEL2, circuit, ssnpa);
+      retval = process_lsp(pdu_type, circuit, ssnpa);
       break;
     case L1_COMPLETE_SEQ_NUM:
     case L2_COMPLETE_SEQ_NUM:
@@ -1731,7 +1622,8 @@ send_hello (struct isis_circuit *circuit, int level)
   if (circuit->ipv6_router && circuit->ipv6_link)
     isis_tlvs_add_ipv6_addresses(tlvs, circuit->ipv6_link);
 
-  if (isis_pack_tlvs(tlvs, circuit->snd_stream, len_pointer, circuit->pad_hellos))
+  if (isis_pack_tlvs(tlvs, circuit->snd_stream, len_pointer,
+                     circuit->pad_hellos, false))
     {
       isis_free_tlvs(tlvs);
       return ISIS_WARNING; /* XXX: Maybe Log TLV structure? */
@@ -1848,6 +1740,7 @@ send_p2p_hello (struct thread *thread)
 /*
  * Count the maximum number of lsps that can be accomodated by a given size.
  */
+#define LSP_ENTRIES_LEN (10 + ISIS_SYS_ID_LEN)
 static uint16_t
 get_max_lsp_count (uint16_t size)
 {
@@ -1898,7 +1791,7 @@ send_csnp (struct isis_circuit *circuit, int level)
     isis_tlvs_add_auth(tlvs, passwd);
 
   size_t tlv_start = stream_get_endp(circuit->snd_stream);
-  if (isis_pack_tlvs(tlvs, circuit->snd_stream, len_pointer, false))
+  if (isis_pack_tlvs(tlvs, circuit->snd_stream, len_pointer, false, false))
     {
       isis_free_tlvs(tlvs);
       return ISIS_WARNING;
@@ -1932,7 +1825,7 @@ send_csnp (struct isis_circuit *circuit, int level)
         }
       else
         {
-          memcpy (stop, last_lsp->lsp_header->lsp_id, ISIS_SYS_ID_LEN + 2);
+          memcpy (stop, last_lsp->hdr.lsp_id, sizeof(stop));
         }
 
       memcpy(STREAM_DATA(circuit->snd_stream) + start_pointer,
@@ -1940,7 +1833,7 @@ send_csnp (struct isis_circuit *circuit, int level)
       memcpy(STREAM_DATA(circuit->snd_stream) + end_pointer,
              stop, ISIS_SYS_ID_LEN + 2);
       stream_set_endp(circuit->snd_stream, tlv_start);
-      if (isis_pack_tlvs(tlvs, circuit->snd_stream, len_pointer, false))
+      if (isis_pack_tlvs(tlvs, circuit->snd_stream, len_pointer, false, false))
         {
           isis_free_tlvs(tlvs);
           return ISIS_WARNING;
@@ -2071,7 +1964,7 @@ send_psnp (int level, struct isis_circuit *circuit)
     isis_tlvs_add_auth(tlvs, passwd);
 
   size_t tlv_start = stream_get_endp(circuit->snd_stream);
-  if (isis_pack_tlvs(tlvs, circuit->snd_stream, len_pointer, false))
+  if (isis_pack_tlvs(tlvs, circuit->snd_stream, len_pointer, false, false))
     {
       isis_free_tlvs(tlvs);
       return ISIS_WARNING;
@@ -2106,7 +1999,7 @@ send_psnp (int level, struct isis_circuit *circuit)
         }
 
       stream_set_endp(circuit->snd_stream, tlv_start);
-      if (isis_pack_tlvs(tlvs, circuit->snd_stream, len_pointer, false))
+      if (isis_pack_tlvs(tlvs, circuit->snd_stream, len_pointer, false, false))
         {
           isis_free_tlvs(tlvs);
           return ISIS_WARNING;
@@ -2255,14 +2148,14 @@ send_lsp (struct thread *thread)
    * the circuit's MTU. So handle and log this case here. */
   if (stream_get_endp(lsp->pdu) > stream_get_size(circuit->snd_stream))
     {
-      zlog_err("ISIS-Upd (%s): Can't send L%d LSP %s, seq 0x%08x,"
-               " cksum 0x%04x, lifetime %us on %s. LSP Size is %zu"
-               " while interface stream size is %zu.",
+      zlog_err("ISIS-Upd (%s): Can't send L%d LSP %s, seq 0x%08" PRIx32
+               ", cksum 0x%04" PRIx16 ", lifetime %" PRIu16 "s on %s. "
+               "LSP Size is %zu while interface stream size is %zu.",
                circuit->area->area_tag, lsp->level,
-               rawlspid_print(lsp->lsp_header->lsp_id),
-               ntohl(lsp->lsp_header->seq_num),
-               ntohs(lsp->lsp_header->checksum),
-               ntohs(lsp->lsp_header->rem_lifetime),
+               rawlspid_print(lsp->hdr.lsp_id),
+               lsp->hdr.seqno,
+               lsp->hdr.checksum,
+               lsp->hdr.rem_lifetime,
                circuit->interface->name,
                stream_get_endp(lsp->pdu),
                stream_get_size(circuit->snd_stream));
@@ -2273,17 +2166,18 @@ send_lsp (struct thread *thread)
     }
 
   /* copy our lsp to the send buffer */
-  stream_copy (circuit->snd_stream, lsp->pdu);
+  stream_copy(circuit->snd_stream, lsp->pdu);
 
   if (isis->debugs & DEBUG_UPDATE_PACKETS)
     {
       zlog_debug
-        ("ISIS-Upd (%s): Sending L%d LSP %s, seq 0x%08x, cksum 0x%04x,"
-         " lifetime %us on %s", circuit->area->area_tag, lsp->level,
-         rawlspid_print (lsp->lsp_header->lsp_id),
-         ntohl (lsp->lsp_header->seq_num),
-         ntohs (lsp->lsp_header->checksum),
-         ntohs (lsp->lsp_header->rem_lifetime),
+        ("ISIS-Upd (%s): Sending L%d LSP %s, seq 0x%08" PRIx32
+         ", cksum 0x%04" PRIx16 ", lifetime %" PRIu16 "s on %s",
+         circuit->area->area_tag, lsp->level,
+         rawlspid_print(lsp->hdr.lsp_id),
+         lsp->hdr.seqno,
+         lsp->hdr.checksum,
+         lsp->hdr.rem_lifetime,
          circuit->interface->name);
       if (isis->debugs & DEBUG_PACKET_DUMP)
         zlog_dump_data (STREAM_DATA (circuit->snd_stream),
@@ -2317,40 +2211,3 @@ out:
   return retval;
 }
 
-int
-ack_lsp (struct isis_link_state_hdr *hdr, struct isis_circuit *circuit,
-	 int level)
-{
-  unsigned long lenp;
-  int retval;
-  u_int16_t length;
-  uint8_t pdu_type = (level == IS_LEVEL_1) ? L1_PARTIAL_SEQ_NUM : L2_PARTIAL_SEQ_NUM;
-
-  isis_circuit_stream(circuit, &circuit->snd_stream);
-
-  fill_fixed_hdr(pdu_type, circuit->snd_stream);
-
-  lenp = stream_get_endp (circuit->snd_stream);
-  stream_putw (circuit->snd_stream, 0);	/* PDU length  */
-  stream_put (circuit->snd_stream, isis->sysid, ISIS_SYS_ID_LEN);
-  stream_putc (circuit->snd_stream, circuit->idx);
-  stream_putc (circuit->snd_stream, 9);	/* code */
-  stream_putc (circuit->snd_stream, 16);	/* len */
-
-  stream_putw (circuit->snd_stream, ntohs (hdr->rem_lifetime));
-  stream_put (circuit->snd_stream, hdr->lsp_id, ISIS_SYS_ID_LEN + 2);
-  stream_putl (circuit->snd_stream, ntohl (hdr->seq_num));
-  stream_putw (circuit->snd_stream, ntohs (hdr->checksum));
-
-  length = (u_int16_t) stream_get_endp (circuit->snd_stream);
-  /* Update PDU length */
-  stream_putw_at (circuit->snd_stream, lenp, length);
-
-  retval = circuit->tx (circuit, level);
-  if (retval != ISIS_OK)
-    zlog_err ("ISIS-Upd (%s): Send L%d LSP PSNP on %s failed",
-              circuit->area->area_tag, level,
-              circuit->interface->name);
-
-  return retval;
-}

@@ -49,6 +49,9 @@ struct isis_extended_reach {
 
 	uint8_t id[7];
 	uint32_t metric;
+
+	uint8_t *subtlvs;
+	uint8_t subtlv_len;
 };
 
 struct isis_extended_ip_reach;
@@ -157,6 +160,7 @@ struct isis_tlvs {
 	struct isis_item_list ipv6_address;
 	struct isis_item_list mt_router_info;
 	bool mt_router_info_empty;
+	struct in_addr *te_router_id;
 	struct isis_item_list extended_ip_reach;
 	struct isis_mt_item_list mt_ip_reach;
 	char *hostname;
@@ -178,7 +182,6 @@ enum isis_tlv_context {
 };
 
 /* TODO: 12 Checksum
-        134 TE Router ID
 */
 
 
@@ -195,6 +198,7 @@ enum isis_tlv_type {
 	ISIS_TLV_PROTOCOLS_SUPPORTED = 129,
 	ISIS_TLV_OLDSTYLE_IP_REACH_EXT = 130,
 	ISIS_TLV_IPV4_ADDRESS = 132,
+	ISIS_TLV_TE_ROUTER_ID = 134,
 	ISIS_TLV_EXTENDED_IP_REACH = 135,
 	ISIS_TLV_DYNAMIC_HOSTNAME = 137,
 	ISIS_TLV_MT_REACH = 222,
@@ -215,7 +219,7 @@ enum isis_tlv_type {
 
 struct stream;
 int isis_pack_tlvs(struct isis_tlvs *tlvs, struct stream *stream,
-                   size_t len_pointer, bool pad);
+                   size_t len_pointer, bool pad, bool is_lsp);
 void isis_free_tlvs(struct isis_tlvs *tlvs);
 struct isis_tlvs *isis_alloc_tlvs(void);
 int isis_unpack_tlvs(size_t avail_len,
@@ -245,10 +249,11 @@ void isis_tlvs_add_lan_neighbors(struct isis_tlvs *tlvs, struct list *neighbors)
 void isis_tlvs_set_protocols_supported(struct isis_tlvs *tlvs, struct nlpids *nlpids);
 void isis_tlvs_add_mt_router_info(struct isis_tlvs *tlvs, uint16_t mtid,
                                   bool overload, bool attached);
+void isis_tlvs_add_ipv4_address(struct isis_tlvs *tlvs, struct in_addr *addr);
 void isis_tlvs_add_ipv4_addresses(struct isis_tlvs *tlvs, struct list *addresses);
 void isis_tlvs_add_ipv6_addresses(struct isis_tlvs *tlvs, struct list *addresses);
 bool isis_tlvs_auth_is_valid(struct isis_tlvs *tlvs, struct isis_passwd *passwd,
-                             struct stream *stream);
+                             struct stream *stream, bool is_lsp);
 bool isis_tlvs_area_addresses_match(struct isis_tlvs *tlvs, struct list *addresses);
 struct isis_adjacency;
 void isis_tlvs_to_adj(struct isis_tlvs *tlvs, struct isis_adjacency *adj, bool *changed);
@@ -258,4 +263,22 @@ void isis_tlvs_add_csnp_entries(struct isis_tlvs *tlvs,
                                 uint8_t *start_id, uint8_t *stop_id,
                                 uint16_t num_lsps, dict_t *lspdb,
                                 struct isis_lsp **last_lsp);
+void isis_tlvs_set_dynamic_hostname(struct isis_tlvs *tlvs,
+                                    const char *hostname);
+void isis_tlvs_set_te_router_id(struct isis_tlvs *tlvs,
+                                const struct in_addr *id);
+void isis_tlvs_add_oldstyle_ip_reach(struct isis_tlvs *tlvs,
+                                     struct prefix_ipv4 *dest, uint8_t metric);
+void isis_tlvs_add_extended_ip_reach(struct isis_tlvs *tlvs,
+                                     struct prefix_ipv4 *dest, uint32_t metric);
+void isis_tlvs_add_ipv6_reach(struct isis_tlvs *tlvs, uint16_t mtid,
+                              struct prefix_ipv6 *dest, uint32_t metric);
+void isis_tlvs_add_oldstyle_reach(struct isis_tlvs *tlvs, uint8_t *id,
+                                  uint8_t metric);
+void isis_tlvs_add_extended_reach(struct isis_tlvs *tlvs, uint16_t mtid,
+                                  uint8_t *id, uint32_t metric,
+                                  uint8_t *subtlvs, uint8_t subtlv_len);
+
+struct isis_mt_router_info *isis_tlvs_lookup_mt_router_info(
+                                       struct isis_tlvs *tlvs, uint16_t mtid);
 #endif
