@@ -729,165 +729,63 @@ lsp_refresh_time (struct isis_lsp *lsp, u_int16_t rem_lifetime)
   return refresh_time;
 }
 
-#if 0
-static struct isis_lsp *
-lsp_next_frag (u_char frag_num, struct isis_lsp *lsp0, struct isis_area *area,
-	       int level)
-{
-  struct isis_lsp *lsp;
-  u_char frag_id[ISIS_SYS_ID_LEN + 2];
-
-  memcpy (frag_id, lsp0->hdr.lsp_id, ISIS_SYS_ID_LEN + 1);
-  LSP_FRAGMENT (frag_id) = frag_num;
-  /* FIXME add authentication TLV for fragment LSPs */
-  lsp = lsp_search (frag_id, area->lspdb[level - 1]);
-  if (lsp)
-    {
-      /* Clear the TLVs */
-      lsp_clear_data (lsp);
-      return lsp;
-    }
-  lsp = lsp_new (area, frag_id, lsp0->hdr.rem_lifetime, 0,
-                 lsp_bits_generate (level, area->overload_bit,
-                 area->attached_bit), 0, level);
-  lsp->area = area;
-  lsp->own_lsp = 1;
-  lsp_insert (lsp, area->lspdb[level - 1]);
-  listnode_add (lsp0->lspu.frags, lsp);
-  lsp->lspu.zero_lsp = lsp0;
-  return lsp;
-}
-
 static void
-lsp_build_ext_reach_ipv4(struct isis_lsp *lsp, struct isis_area *area,
-                         struct tlvs *tlv_data)
+lsp_build_ext_reach_ipv4(struct isis_lsp *lsp, struct isis_area *area)
 {
-  struct route_table *er_table;
-  struct route_node *rn;
-  struct prefix_ipv4 *ipv4;
-  struct isis_ext_info *info;
-  struct ipv4_reachability *ipreach;
-  struct te_ipv4_reachability *te_ipreach;
-
-  er_table = get_ext_reach(area, AF_INET, lsp->level);
+  struct route_table *er_table = get_ext_reach(area, AF_INET, lsp->level);
   if (!er_table)
     return;
 
-  for (rn = route_top(er_table); rn; rn = route_next(rn))
+  for (struct route_node *rn = route_top(er_table); rn; rn = route_next(rn))
     {
       if (!rn->info)
         continue;
 
-      ipv4 = (struct prefix_ipv4*)&rn->p;
-      info = rn->info;
+      struct prefix_ipv4 *ipv4 = (struct prefix_ipv4*)&rn->p;
+      struct isis_ext_info *info = rn->info;
+
+      uint32_t metric = info->metric;
+      if (metric > MAX_WIDE_PATH_METRIC)
+        metric = MAX_WIDE_PATH_METRIC;
+      if (area->oldmetric && metric > 0x3f)
+        metric = 0x3f;
+
       if (area->oldmetric)
-        {
-          if (tlv_data->ipv4_ext_reachs == NULL)
-            {
-              tlv_data->ipv4_ext_reachs = list_new();
-              tlv_data->ipv4_ext_reachs->del = free_tlv;
-            }
-          ipreach = XMALLOC(MTYPE_ISIS_TLV, sizeof(*ipreach));
-
-          ipreach->prefix.s_addr = ipv4->prefix.s_addr;
-          masklen2ip(ipv4->prefixlen, &ipreach->mask);
-          ipreach->prefix.s_addr &= ipreach->mask.s_addr;
-
-          if ((info->metric & 0x3f) != info->metric)
-            ipreach->metrics.metric_default = 0x3f;
-          else
-            ipreach->metrics.metric_default = info->metric;
-          ipreach->metrics.metric_expense = METRICS_UNSUPPORTED;
-          ipreach->metrics.metric_error = METRICS_UNSUPPORTED;
-          ipreach->metrics.metric_delay = METRICS_UNSUPPORTED;
-          listnode_add(tlv_data->ipv4_ext_reachs, ipreach);
-        }
+        isis_tlvs_add_oldstyle_ip_reach(lsp->tlvs, ipv4, metric);
       if (area->newmetric)
-        {
-          if (tlv_data->te_ipv4_reachs == NULL)
-            {
-              tlv_data->te_ipv4_reachs = list_new();
-              tlv_data->te_ipv4_reachs->del = free_tlv;
-            }
-          te_ipreach =
-              XCALLOC(MTYPE_ISIS_TLV,
-                      sizeof(*te_ipreach) - 1 + PSIZE(ipv4->prefixlen));
-          if (info->metric > MAX_WIDE_PATH_METRIC)
-            te_ipreach->te_metric = htonl(MAX_WIDE_PATH_METRIC);
-          else
-            te_ipreach->te_metric = htonl(info->metric);
-          te_ipreach->control = ipv4->prefixlen & 0x3f;
-          memcpy(&te_ipreach->prefix_start, &ipv4->prefix.s_addr,
-                 PSIZE(ipv4->prefixlen));
-          listnode_add(tlv_data->te_ipv4_reachs, te_ipreach);
-        }
+        isis_tlvs_add_extended_ip_reach(lsp->tlvs, ipv4, metric);
     }
-}
-
-static struct list *
-tlv_get_ipv6_reach_list(struct isis_area *area, struct tlvs *tlv_data)
-{
-  uint16_t mtid = isis_area_ipv6_topology(area);
-  if (mtid == ISIS_MT_IPV4_UNICAST)
-    {
-      if (!tlv_data->ipv6_reachs)
-        {
-          tlv_data->ipv6_reachs = list_new();
-          tlv_data->ipv6_reachs->del = free_tlv;
-        }
-      return tlv_data->ipv6_reachs;
-    }
-
-  struct tlv_mt_ipv6_reachs *reachs = tlvs_get_mt_ipv6_reachs(tlv_data, mtid);
-  return reachs->list;
 }
 
 static void
-lsp_build_ext_reach_ipv6(struct isis_lsp *lsp, struct isis_area *area,
-                         struct tlvs *tlv_data)
+lsp_build_ext_reach_ipv6(struct isis_lsp *lsp, struct isis_area *area)
 {
-  struct route_table *er_table;
-  struct route_node *rn;
-  struct prefix_ipv6 *ipv6;
-  struct isis_ext_info *info;
-  struct ipv6_reachability *ip6reach;
-  struct list *reach_list = NULL;
-
-  er_table = get_ext_reach(area, AF_INET6, lsp->level);
+  struct route_table *er_table = get_ext_reach(area, AF_INET6, lsp->level);
   if (!er_table)
     return;
 
-  for (rn = route_top(er_table); rn; rn = route_next(rn))
+  for (struct route_node *rn = route_top(er_table); rn; rn = route_next(rn))
     {
       if (!rn->info)
         continue;
 
-      ipv6 = (struct prefix_ipv6*)&rn->p;
-      info = rn->info;
+      struct prefix_ipv6 *ipv6 = (struct prefix_ipv6*)&rn->p;
+      struct isis_ext_info *info = rn->info;
 
-      if (!reach_list)
-        reach_list = tlv_get_ipv6_reach_list(area, tlv_data);
-
-      ip6reach = XCALLOC(MTYPE_ISIS_TLV, sizeof(*ip6reach));
+      uint32_t metric = info->metric;
       if (info->metric > MAX_WIDE_PATH_METRIC)
-        ip6reach->metric = htonl(MAX_WIDE_PATH_METRIC);
-      else
-        ip6reach->metric = htonl(info->metric);
-      ip6reach->control_info = DISTRIBUTION_EXTERNAL;
-      ip6reach->prefix_len = ipv6->prefixlen;
-      memcpy(ip6reach->prefix, ipv6->prefix.s6_addr, sizeof(ip6reach->prefix));
-      listnode_add(reach_list, ip6reach);
+        metric = MAX_WIDE_PATH_METRIC;
+      isis_tlvs_add_ipv6_reach(lsp->tlvs, isis_area_ipv6_topology(area),
+                               ipv6, metric);
     }
 }
 
 static void
-lsp_build_ext_reach (struct isis_lsp *lsp, struct isis_area *area,
-                     struct tlvs *tlv_data)
+lsp_build_ext_reach(struct isis_lsp *lsp, struct isis_area *area)
 {
-  lsp_build_ext_reach_ipv4(lsp, area, tlv_data);
-  lsp_build_ext_reach_ipv6(lsp, area, tlv_data);
+  lsp_build_ext_reach_ipv4(lsp, area);
+  lsp_build_ext_reach_ipv6(lsp, area);
 }
-#endif
 
 /*
  * Builds the LSP data part. This func creates a new frag whenever 
@@ -1138,7 +1036,7 @@ lsp_build (struct isis_lsp *lsp, struct isis_area *area)
         }
     }
 
-  /* lsp_build_ext_reach(lsp, area, &tlv_data); */
+  lsp_build_ext_reach(lsp, area);
 
   lsp_debug("ISIS (%s): LSP construction is complete. Serializing...", area->area_tag);
   return;
