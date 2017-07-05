@@ -646,7 +646,7 @@ lsp_print_detail (struct isis_lsp *lsp, struct vty *vty, char dynhost)
   lsp_print (lsp, vty, dynhost);
   if (lsp->tlvs)
     vty_multiline(vty, "  ", "%s", isis_format_tlvs(lsp->tlvs));
-  vty_outln(vty, "");
+  vty_out(vty, VTYNL);
 #if 0
   /* For extended reachabilities */
       if (IS_MPLS_TE(isisMplsTE))

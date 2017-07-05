@@ -102,7 +102,7 @@ void vty_multiline(struct vty *vty, const char *prefix, const char *format, ...)
 	char *saveptr = NULL;
 	for (char *line = strtok_r(p, "\n", &saveptr); line;
 	     line = strtok_r(NULL, "\n", &saveptr)) {
-	       vty_out(vty, "%s%s%s", prefix, line, VTY_NEWLINE);
+	       vty_outln(vty, "%s%s", prefix, line);
 	}
 
 	XFREE(MTYPE_TMP, p);
